@@ -1,142 +1,78 @@
-# Phased Plan – Agent Mesh Observatory & Governor
+# Phased Plan – Agent Identity Control Plane
 
-This document is the canonical map of phases, deliverables, and current status for the project.
+This is the canonical phased plan for the **Identity + Policy control plane at the action boundary**:
+enforce intent-bound capabilities for both employee “shadow AI” interactions and tool-enabled agents.
 
 Status legend:
-- **HAVE** – Exists in a reasonably complete form.
-- **PARTIAL** – Concept/content exists but not yet as a clean standalone asset.
+- **HAVE** – Exists as a reasonably complete asset.
+- **PARTIAL** – Concept exists but needs cleanup.
 - **MISSING** – Needs to be created.
 
-Known PDFs already in the project:
-- `agent_mesh_observatory_v0_spec.pdf` – V0 product/tech spec (updated pivot).
-- `agent_mesh_market_analysis.pdf` – market & competitive analysis (updated pivot).
-- `Pr-centric Voice Manager + Autonomous Agent Workflow (open Hands + Open Router).pdf` – build workflow manual (updated pivot).
+Known assets already in this repo:
+- `identity_v0_spec_control_plane.pdf` – V0 product/tech spec (**HAVE**).
+- `identity_market_analysis.pdf` – market & competitive analysis (**HAVE**).
+- `identity_comparative_analysis.pdf` – comparisons + positioning vs adjacent approaches (**HAVE**).
 
 ---
 
-## Pivot Update – Shadow AI Control Plane (Dec 25, 2025)
+## Phase 0 – Decision + ICP Lock (1–2 weeks)
 
-We are reframing the company around a **single, painful problem that exists today**:
+**Goal:** pick the *first* integration surface where we can enforce and produce receipts.
 
-> Organizations can’t enforce policy at the *moment of AI action* — when a user or agent is about to (a) upload sensitive data, or (b) trigger a real tool call with real blast radius.
+Deliverables:
+- ICP + buyer memo (**MISSING**): security+platform co-buyer, initial wedge.
+- “Day-1 policies” list (**MISSING**): 5–10 policies that matter (e.g., block public model uploads of repo code; require approval for prod DB queries).
+- Target connector list (**MISSING**): start with 2–3 high-leverage tools.
 
-Most “shadow AI” programs stop at **visibility + policy docs**. Most “agent platforms” stop at **a managed runtime**. The gap is a unified **action-boundary control plane** that spans both:
-
-1) **Employee / ad-hoc GenAI usage (Shadow AI)**
-   - Browser, desktop, IDE copilots, personal accounts
-   - File uploads + copy/paste + prompts to consumer tools
-   - No centralized identity, routing, or enforcement
-
-2) **Sanctioned internal agents (Tool-enabled automation)**
-   - Framework diversity (LangGraph, CrewAI, homegrown, etc.)
-   - Tool surface area (SQL, Jira, GitHub, cloud APIs, payments)
-   - Inconsistent enforcement, weak audit trails, painful IR
-
-**Our wedge:** one policy model + one evidence model across *all* AI interactions (humans + agents).
+Success criteria:
+- We can describe the first demo in one paragraph and one diagram.
 
 ---
 
-## Product Modules (Target Architecture)
+## Phase 1 – Action Boundary MVP (PEP + PDP + Receipts) (2–4 weeks)
 
-### A) Enforcement / Data Plane (PEPs)
-- **User path PEP:** secure web gateway / forward proxy integration (optionally a browser extension for UX).
-- **Agent path PEP:** SDK wrappers and/or a tool-call proxy for MCP/HTTP/RPC tools.
-- **Credential broker:** mint short-lived, scoped credentials per high-risk action (break-glass + approvals).
+**Goal:** block/allow a real tool action with a clear rationale + a signed receipt.
 
-### B) Control Plane
-- **Policy Decision Point (PDP):** returns allow/deny/allow-with-constraints with rationale + obligations.
-- **Policy store:** versioned, testable policy-as-code workflow.
-- **Identity:** SSO user identity + device identity + workload/service identity + environment context.
+Build:
+- Policy Decision Point (PDP): allow/deny/allow-with-constraints.
+- Policy store: versioned policy-as-code workflow + tests.
+- Enforcement point (PEP) for *one* path:
+  - Agent tool-call PEP (MCP/HTTP) **or**
+  - User traffic PEP (proxy/gateway) for a narrow set of endpoints.
+- Receipt schema + signing; minimal “ledger” store.
 
-### C) Telemetry + IR Plane
-- Canonical event schema across user prompts/uploads and agent tool calls.
-- Investigation UX: interaction graph, timeline, replay, evidence bundle export.
-
----
-
-## Phase 1 – Problem, Positioning, and Wedge
-
-**Goal:** lock the crisp narrative + wedge and make it hard to confuse with “just observability”.
-
-### Deliverables
-1. **Vision One-Pager** (`docs/vision.md`) – **MISSING**
-   - One sentence wedge, why now, buyer persona, and V0 success definition.
-
-2. **Category positioning** (`docs/positioning.md`) – **MISSING**
-   - “SSE/CASB for AI actions” + “agent tool-call control plane” (unified primitives).
-
-3. **Threat model** (`docs/threat_model.md`) – **MISSING**
-   - Top abuse cases: data exfil, prompt injection -> tool abuse, privilege escalation, lateral movement.
-
-4. **V0 Demo Definition** (`docs/v0_demo_definition.md`) – **MISSING**
-   - A scripted demo that proves real enforcement + evidence export.
+Demo:
+- Prompt injection attempt → blocked privileged tool call → receipt explains why.
 
 ---
 
-## Phase 2 – Policy Model + Integration Strategy
+## Phase 2 – Credential Brokering + Approvals (2–4 weeks)
 
-**Goal:** decide the exact policy surface and where enforcement happens.
+**Goal:** shift from “static allowlists” to **intent-bound capabilities**.
 
-### Deliverables
-1. **Policy model spec** (`docs/policy_model.md`) – **MISSING**
-   - Entities: identity (user/agent), tool, resource, action, parameters, env, time.
-   - Decisions: allow/deny/allow-with-constraints; rationale codes; obligations.
-
-2. **Canonical event schema v0** (`docs/specs/event_schema_v0.md`) – **MISSING**
-   - Trace + span fields plus AI-specific fields (tool name, input/output summaries, redaction flags).
-
-3. **Integration plan** (`docs/integrations.md`) – **MISSING**
-   - V0 targets: (a) one “user path” integration, (b) one “agent path” integration, (c) one high-risk tool.
+Build:
+- Credential broker for 1–2 tools (time-bound, least-privilege tokens).
+- Approval flow for high-risk actions (break-glass, time-bound overrides).
+- Audit UI: timeline + search.
 
 ---
 
-## Phase 3 – V0 Build (Working Product Slice)
+## Phase 3 – Expand Connectors + Org Rollout (4–8 weeks)
 
-**Goal:** ship a working, demoable system with real enforcement.
+**Goal:** become valuable across a real team.
 
-### Deliverables
-1. **Ingest API + storage** – **MISSING**
-   - Postgres tables: events, decisions, policy versions, investigations.
-
-2. **PDP service** – **MISSING**
-   - JSON policy rules first; deterministic evaluation; decision logging.
-
-3. **PEP #1 (Agent tool wrapper/proxy)** – **MISSING**
-   - Intercept tool call, call PDP, enforce constraints, emit events.
-
-4. **PEP #2 (User path routing)** – **MISSING**
-   - Minimal proxy/routing path for approved GenAI endpoints + logging.
-
-5. **UI v0** – **MISSING**
-   - Recent events view + basic graph + “investigation export” action.
+Build:
+- Add connectors (GitHub/Jira/Slack/SQL/cloud) based on ICP.
+- Policy bundles / templates (starter packs).
+- Multi-environment support (dev/stage/prod contexts).
+- Better evidence bundles (export + redaction).
 
 ---
 
-## Phase 4 – Hardening + Enterprise Controls
+## Phase 4 – Scale + “Enterprise Grade” (later)
 
-**Goal:** make it safe, operable, and integratable in real orgs.
+Build:
+- Multi-tenant SaaS or hardened single-tenant deployments.
+- More expressive policy model (optional OPA/Cedar compatibility).
+- Advanced investigations (graph correlation with Mesh, if pursued).
 
-### Deliverables
-- Policy-as-code workflows (CI tests, approvals, change control).
-- Integrations with SSE/SIEM (Splunk/Sentinel), OpenTelemetry, and ticketing.
-- Strong privacy defaults (summaries/hashes; optional raw content).
-- Retention + encryption + customer-managed keys (where needed).
-
----
-
-## Phase 5 – GTM + Design Partner Rollout
-
-**Goal:** turn V0 into revenue with design partners.
-
-### Deliverables
-- Design partner agreement + success criteria.
-- Pricing hypothesis (per seat + per agent/tool; or per protected interaction).
-- Case studies: “blocked X” + “reduced investigation time by Y” + “routed shadow AI to approved tools”.
-
----
-
-## Current Assets Status (as of Dec 25, 2025)
-
-- **HAVE:** Updated V0 spec and market analysis PDFs.
-- **HAVE:** Updated PR-centric build workflow manual.
-- **PARTIAL/MISSING:** Most repo- and build-specific docs (policy model, event schema, integrations, threat model).
