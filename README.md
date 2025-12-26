@@ -1,7 +1,5 @@
 # Umbra
 
-![Umbra logo](assets/umbra-logo.png)
-
 Umbra is building the **security layer for AI agents** in the enterprise: a control plane that sits between agents and the tools they use, deciding what actions are allowed, enforcing those decisions, and recording a tamper-evident audit trail.
 
 As companies adopt agents to ship code, query data, and operate production systems, they need answers that hold up under scrutiny:
