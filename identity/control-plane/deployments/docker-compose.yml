@@ -1,0 +1,95 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: umbra
+      POSTGRES_PASSWORD: umbra
+      POSTGRES_DB: umbra
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./local/.data/postgres:/var/lib/postgresql/data
+      - ../migrations:/migrations:ro
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  upstream-sample:
+    image: hashicorp/http-echo:1.0.0
+    command: ["-listen=:9000", "-text=hello-from-upstream"]
+    ports:
+      - "9000:9000"
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.61
+    ports:
+      - "16686:16686"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.108.0
+    command: ["--config=/etc/otel-collector.yml"]
+    volumes:
+      - ./otel-collector.yml:/etc/otel-collector.yml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      - jaeger
+
+  controlplane-api:
+    build: ../services/controlplane-api
+    environment:
+      UMBRA_ENV: dev
+      DATABASE_URL: postgres://umbra:umbra@postgres:5432/umbra?sslmode=disable
+      REDIS_ADDR: redis:6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      PORT: "8080"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - redis
+      - otel-collector
+
+  pdp:
+    build: ../services/pdp
+    environment:
+      UMBRA_ENV: dev
+      DATABASE_URL: postgres://umbra:umbra@postgres:5432/umbra?sslmode=disable
+      REDIS_ADDR: redis:6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      PORT: "8081"
+    ports:
+      - "8081:8081"
+    depends_on:
+      - postgres
+      - redis
+      - otel-collector
+
+  pep-gateway:
+    build: ../services/pep-gateway
+    environment:
+      UMBRA_ENV: dev
+      PDP_URL: http://pdp:8081
+      DATABASE_URL: postgres://umbra:umbra@postgres:5432/umbra?sslmode=disable
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      PORT: "8082"
+    ports:
+      - "8082:8082"
+    depends_on:
+      - pdp
+      - postgres
+      - otel-collector
+      - upstream-sample
+
+  ui:
+    build: ../ui
+    environment:
+      NEXT_PUBLIC_CONTROLPLANE_URL: http://localhost:8080
+      NEXT_PUBLIC_TENANT_ID: ""
+    ports:
+      - "3000:3000"
+    depends_on:
+      - controlplane-api

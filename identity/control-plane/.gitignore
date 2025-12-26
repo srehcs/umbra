@@ -1,0 +1,22 @@
+# general
+.DS_Store
+.env
+.idea/
+.vscode/
+**/.cache/
+**/dist/
+**/build/
+
+# go
+**/*.test
+**/*.out
+**/bin/
+**/tmp/
+
+# node
+**/node_modules/
+**/.next/
+**/.turbo/
+
+# compose
+deployments/local/.data/
