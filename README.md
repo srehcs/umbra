@@ -1,22 +1,26 @@
 # Umbra
 
-Umbra is the homebase repo for our incubating ideas: product concepts, v0 specs, market analysis, and phased build plans.
-It’s intended to be a single place we can iterate on multiple directions, compare them, and converge on one to pursue.
+Umbra is the **homebase** for the projects we are considering and actively building.
 
-## Repo structure
+## Current projects
 
-- `comparative_analysis.pdf` — the cross-v0 comparison and decision framing.
-- `identity/` — agent identity / control plane framing and materials.
-- `mesh/` — agent mesh observability / governance framing and materials.
-- `setup/` — how we want to build (workflows, tooling references). Not tied to a single product direction.
+### Identity
+- **Agent Identity Control Plane (V0-C)**: enterprise-facing control plane that evaluates tool invocations (PDP),
+  enforces decisions (PEP), and emits audit receipts (hash-chained, signing-ready).
 
-## How to use this repo
+  Repo path: `umbra/identity/control-plane/`
 
-1. Start with `comparative_analysis.pdf` to understand the candidate v0s and the decision criteria.
-2. Dive into `identity/` and `mesh/` to evaluate the core wedge, differentiation, and build path.
-3. Use `setup/` to dogfood our development workflow as we prototype.
+  - UI (Next.js + ShadCN): `umbra/identity/control-plane/ui/`
+  - Services (Go): `umbra/identity/control-plane/services/`
+  - Packages: `umbra/identity/control-plane/packages/`
+  - Docs (ADRs, C4, OpenAPI, threat model): `umbra/identity/control-plane/docs/`
 
-## Conventions
+### Mesh
+- Reserved for mesh/observability concepts and comparisons (not the active build).
 
-- Filenames use `lowercase_snake_case`.
-- The top-level comparative doc stays at repo root for fast scanning.
+### Setup
+- Workflows and development setup references.
+
+## How to work in this monorepo
+- Engineering rules: `RULES.md`
+- For control-plane dev: see `identity/control-plane/docs/how-to-develop.md`

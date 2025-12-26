@@ -1,0 +1,305 @@
+openapi: 3.0.3
+info:
+  title: Umbra Agent Identity Control Plane API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+    description: Local Control Plane API
+tags:
+  - name: decision
+  - name: tools
+  - name: policies
+  - name: receipts
+
+paths:
+  /v1/decision:
+    post:
+      tags: [decision]
+      summary: Evaluate a policy decision (PDP)
+      operationId: postDecision
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionResponse'
+
+  /v1/tools:
+    get:
+      tags: [tools]
+      summary: List tools (tenant-scoped)
+      operationId: listTools
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolList'
+    post:
+      tags: [tools]
+      summary: Create tool (tenant-scoped)
+      operationId: createTool
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateToolRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tool'
+
+  /v1/policies:
+    get:
+      tags: [policies]
+      summary: List policies (tenant-scoped)
+      operationId: listPolicies
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyList'
+    post:
+      tags: [policies]
+      summary: Create policy (tenant-scoped)
+      operationId: createPolicy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePolicyRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Policy'
+
+  /v1/policies/activate:
+    post:
+      tags: [policies]
+      summary: Activate a policy by ID (tenant-scoped)
+      operationId: activatePolicy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                policy_id: { type: string }
+              required: [policy_id]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+
+  /v1/policies/simulate:
+    post:
+      tags: [policies]
+      summary: Simulate a decision against active policy (or supplied policy JSON)
+      operationId: simulatePolicy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimulateRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimulateResponse'
+
+  /v1/receipts:
+    get:
+      tags: [receipts]
+      summary: List recent receipts (decision + invocation)
+      operationId: listReceipts
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+        - in: query
+          name: kind
+          schema: { type: string, enum: [decision, invocation] }
+        - in: query
+          name: q
+          schema: { type: string }
+          description: Best-effort substring search across receipt JSON (V0)
+        - in: query
+          name: before
+          schema: { type: string, format: date-time }
+          description: Cursor for pagination (RFC3339 timestamp, exclusive)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiptList'
+
+components:
+  schemas:
+    DecisionRequest:
+      type: object
+      properties:
+        tenant:
+          type: object
+          properties:
+            tenant_id: { type: string }
+          required: [tenant_id]
+        actor:
+          type: object
+          properties:
+            type: { type: string }
+            id: { type: string }
+            roles:
+              type: array
+              items: { type: string }
+          required: [type, id]
+        tool:
+          type: object
+          properties:
+            name: { type: string }
+            method: { type: string }
+            endpoint: { type: string }
+          required: [name, method, endpoint]
+        trace:
+          type: object
+          properties:
+            request_id: { type: string }
+            trace_id: { type: string }
+            span_id: { type: string }
+      required: [tenant, actor, tool]
+
+    DecisionResponse:
+      type: object
+      properties:
+        decision: { type: string, enum: [allow, deny] }
+        decision_id: { type: string }
+        policy_version: { type: integer }
+        policy_hash: { type: string }
+        rule_index: { type: integer, nullable: true }
+        obligations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Obligation'
+        reason: { type: string }
+      required: [decision, decision_id]
+
+Obligation:
+  type: object
+  properties:
+    kind: { type: string }
+    params:
+      type: object
+      additionalProperties: { type: string }
+  required: [kind]
+
+    Tool:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        kind: { type: string }
+        config: { type: object }
+      required: [id, name, kind]
+
+    ToolList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Tool' }
+
+    CreateToolRequest:
+      type: object
+      properties:
+        name: { type: string }
+        kind: { type: string }
+        config: { type: object }
+      required: [name, kind]
+
+    Policy:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        version: { type: integer }
+        active: { type: boolean }
+        policy_hash: { type: string }
+        policy:
+          type: object
+          description: JSON policy document
+      required: [id, name, version, active, policy_hash]
+
+    PolicyList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Policy' }
+
+    CreatePolicyRequest:
+      type: object
+      properties:
+        name: { type: string }
+        policy: { type: object }
+      required: [name, policy]
+
+    SimulateRequest:
+      type: object
+      properties:
+        actor_roles:
+          type: array
+          items: { type: string }
+        method: { type: string }
+        path: { type: string }
+        policy:
+          type: object
+          description: Optional policy JSON to simulate against instead of active policy
+      required: [method, path]
+
+    SimulateResponse:
+      type: object
+      properties:
+        decision: { type: string, enum: [allow, deny] }
+        reason: { type: string }
+        rule_index: { type: integer, nullable: true }
+        policy_hash: { type: string }
+        policy_version: { type: integer }
+      required: [decision, reason]
+
+    ReceiptList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { type: object }
+        next_before:
+          type: string
+          format: date-time

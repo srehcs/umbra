@@ -1,0 +1,9 @@
+# Default owners (edit these to your GitHub handles / teams)
+* @umbra-core
+
+# High-risk surfaces require explicit owners
+/services/controlplane-api/internal/auth/   @umbra-security
+/services/pdp/internal/decision/            @umbra-security
+/services/**/migrations/                    @umbra-data
+/docs/adr/                                  @umbra-architecture
+/deployments/                               @umbra-platform
