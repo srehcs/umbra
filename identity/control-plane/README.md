@@ -1,83 +1,63 @@
-# Umbra — Agent Identity Control Plane (V0-C)
+# Agent Identity Control Plane (V0‑C)
 
-Umbra’s **Agent Identity Control Plane** is an enterprise-facing control plane that governs **agent/tool invocations**
-by enforcing policy at a **Policy Enforcement Point (PEP)**, evaluating requests in a **Policy Decision Point (PDP)**,
-brokering **least-privilege credentials** (later), and emitting **tamper-evident receipts** for audit/IR.
+This project is the **front door** for AI agent tool usage in an enterprise.
 
-## What ships in this scaffold
-- Monorepo layout with clear boundaries (services / packages / ui / docs / deployments)
-- By-the-book artifacts: ADRs, threat model skeleton, PR/security templates, CODEOWNERS
-- Local dev stack (`docker compose up`) including Postgres + Redis + OTel collector + Jaeger
-- Skeleton services:
-  - `controlplane-api` (policy/tool registry, audit query)
-  - `pdp` (decision endpoint)
-  - `pep-gateway` (HTTP proxy/ext_authz-style; includes MCP + CLI wrapper stubs)
-- OpenAPI skeleton: `/v1/decision`, `/v1/policies`, `/v1/tools`
-- Telemetry stubs: OpenTelemetry tracing + log correlation + request IDs
+It sits between agents and the tools they try to use, so the company can reliably answer:
 
-## Quickstart
+- **Who** tried to do something (human or agent)?
+- **What tool** did they try to use?
+- **What action** were they attempting?
+- **Was it allowed or blocked—and why?**
+- **What’s the tamper‑evident record** (receipt) of what happened?
+
+Think: **badge reader + security guard + camera log**, but for software actions.
+
+---
+
+## How it works (three pieces)
+
+1) **Control Panel (UI + Control Plane API)**  
+Admins register tools, write policies, and search receipts.
+
+2) **Decision Brain (PDP)**  
+Evaluates policies and returns **allow/deny** (plus obligations later).
+
+3) **Enforcement Gate (PEP Gateway)**  
+Intercepts tool calls, asks PDP, blocks or forwards, and always writes a receipt.
+
+---
+
+## Quick start (local)
+
 ```bash
 make dev
-# or
-make up
 make seed
 ```
 
-Services (default local ports):
+Open:
+- UI: http://localhost:3000
 - Control Plane API: http://localhost:8080
-- PDP:              http://localhost:8081
-- PEP Gateway:      http://localhost:8082
-- UI (Next.js):     http://localhost:3000
-- Jaeger:           http://localhost:16686
+- PDP: http://localhost:8081
+- PEP Gateway: http://localhost:8082
 
-## Docs
-- Executive Summary: `docs/exec_summary.md`
-- Vision: `docs/vision.md`
-- Status: `docs/status.md`
-- Playbook: `docs/playbook.md`
-- Next steps: `docs/next_steps.md`
-
-## Demo
-Follow `docs/runbooks/demo.md`.
-
-## Docs
-- Development workflow: `docs/how-to-develop.md` (references `RULES.md`)
-- API spec: `docs/api/openapi.yaml`
-- Architecture + threat model: `docs/architecture/*`
-- ADRs: `docs/adr/*`
-
-## Deployment intent
-**Customer-only today** (on-prem / customer VPC), with a clear path to **hybrid** later.
-See `docs/adr/0004-deploy-model-customer-only-migrate-to-hybrid.md`.
+Demo script:
+- `docs/04_playbook_demo.md`
+- Examples: `docs/examples/`
 
 ---
-**Note:** If you have an existing Umbra “umbrella docs” folder (spec/market/phases), keep it adjacent in your Umbra homebase.
-This repo focuses on the V0-C product scaffold.
-
-
-## Process
-- Backlog: `docs/process/backlog.md`
-- Definition of Done: `docs/process/definition-of-done.md`
-- Release train: `docs/process/release-train.md`
-- Risk register: `docs/process/risk-register.md`
-- Working agreements: `docs/process/working-agreements.md`
-
-
-## Reference
-- Repo map: `docs/repo_map.md`
-- Acronyms: `docs/acronyms.md`
-
-## Build verification (recommended)
-Run the same checks CI runs (Go + UI):
-
-```bash
-make verify
-```
-
-Notes:
-- First run will download Go/Node dependencies (needs network access).
-- If you’re offline or behind a restricted proxy, run from an environment with registry/proxy access.
 
 ## Documentation
-- Start here: `docs/00_exec_summary.md`
-- Demo playbook: `docs/04_playbook_demo.md`
+
+Start here:
+- `docs/00_exec_summary.md`
+- `docs/04_playbook_demo.md`
+
+Engineering rules (umbrella-level):
+- `../../RULES.md`
+
+---
+
+## Technical details (legacy)
+
+We keep the original technical README here:
+- `README.legacy.md`
