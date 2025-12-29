@@ -11,11 +11,8 @@ You are implementing **Ticket: <ID — title>** in the Umbra monorepo.
 <PASTE THE GITHUB ISSUE BODY HERE>
 
 ## Where to implement (start here; keep scope tight)
-- <path 1>
-- <path 2>
-- <path 3>
-- <path 4>
-- <path 5>
+- Read the repo map and contextual files as needed to make a determination.
+
 
 ## Output required
 - Summary of changes (bullets)
