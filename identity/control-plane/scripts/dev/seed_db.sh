@@ -3,12 +3,36 @@ set -euo pipefail
 
 COMPOSE="docker compose -f deployments/docker-compose.yml"
 
+wait_for_postgres() {
+  echo "[seed] Waiting for postgres to be ready..."
+  for i in {1..60}; do
+    if $COMPOSE exec -T postgres psql -U umbra -d umbra -tAc "SELECT 1" >/dev/null 2>&1; then
+      echo "[seed] Postgres ready"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "[seed] Timed out waiting for postgres"
+  return 1
+}
+
+wait_for_postgres
+
 echo "[seed] Applying migrations..."
 $COMPOSE exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migrations/0001_init.sql
 
 echo "[seed] Seeding tenants..."
 TENANT_A=$($COMPOSE exec -T postgres psql -U umbra -d umbra -tA -c "INSERT INTO tenants(name) VALUES('TenantA') ON CONFLICT(name) DO UPDATE SET name=EXCLUDED.name RETURNING id;")
 TENANT_B=$($COMPOSE exec -T postgres psql -U umbra -d umbra -tA -c "INSERT INTO tenants(name) VALUES('TenantB') ON CONFLICT(name) DO UPDATE SET name=EXCLUDED.name RETURNING id;")
+
+# Trim whitespace/newlines
+TENANT_A=$(echo "$TENANT_A" | xargs)
+TENANT_B=$(echo "$TENANT_B" | xargs)
+
+if [[ -z "$TENANT_A" || -z "$TENANT_B" ]]; then
+  echo "[seed] Failed to compute tenant ids"
+  exit 1
+fi
 
 echo "[seed] TenantA=$TENANT_A"
 echo "[seed] TenantB=$TENANT_B"
@@ -23,18 +47,8 @@ $COMPOSE exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -c "
 "
 
 echo "[seed] Seeding policies..."
-# Minimal ABAC policy: allow GET /demo for role 'admin' or 'developer'
-POLICY_JSON='{
-  "version": 1,
-  "mode": "abac_v0",
-  "rules": [
-    { "effect": "allow", "roles_any": ["admin","developer"], "methods_any": ["GET"], "path_prefix": "/demo" }
-  ],
-  "default": "deny"
-}'
+POLICY_JSON='{"version":1,"mode":"abac_v0","rules":[{"effect":"allow","roles_any":["admin","developer"],"methods_any":["GET"],"path_prefix":"/demo"}],"default":"deny"}'
 
-# compute policy_hash in SQL using sha256 over canonical text representation
-# In V0 seed, we hash the JSON string bytes as provided (policy updates in API compute hash in code).
 $COMPOSE exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -c "
   WITH p AS (
     SELECT '$POLICY_JSON'::jsonb AS js, encode(digest('$POLICY_JSON','sha256'),'hex') AS h
