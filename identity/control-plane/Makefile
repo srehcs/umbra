@@ -36,18 +36,28 @@ logs:
 seed:
 	@bash scripts/dev/seed_db.sh
 
-dev: up seed
-	@echo "Local stack up. See README for ports."
+# Start local stack, wait for readiness, seed the DB, and print endpoints
+dev:
+	@mkdir -p ./local/.data/postgres
+	$(COMPOSE) up -d --build
+	@bash scripts/dev/wait_for_services.sh
+	@bash scripts/dev/seed_db.sh
+	@echo "\nLocal endpoints:"
+	@echo "UI:  http://localhost:3000"
+	@echo "API: http://localhost:8080"
+	@echo "PDP: http://localhost:8081"
+	@echo "PEP: http://localhost:8082"
+
+# Check demo readiness (db, api, pdp, tools/policies, receipts)
+.PHONY: demo-check
+demo-check:
+	@bash scripts/dev/demo_check.sh
 
 docker-build:
 	$(COMPOSE) build
 
-
 migrate:
 	@docker compose -f deployments/docker-compose.yml exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migrations/0001_init.sql
-
-verify:
-	@bash scripts/dev/verify_local.sh
 
 verify:
 	@bash scripts/dev/verify_local.sh
