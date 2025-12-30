@@ -9,15 +9,23 @@ type TenantContext struct {
 }
 
 type Actor struct {
-	Type  string   `json:"type"`            // "user" | "agent" (V0)
-	ID    string   `json:"id"`              // stable identifier
-	Roles []string `json:"roles,omitempty"` // role names (V0)
+	Type   string   `json:"type"`   // "human" | "agent" (V0)
+	ID     string   `json:"id"`     // stable identifier
+	Roles  []string `json:"roles"`  // role names (V0)
+	Source string   `json:"source,omitempty"`
 }
 
 type Tool struct {
 	Name     string `json:"name"`
 	Method   string `json:"method"`
 	Endpoint string `json:"endpoint"`
+}
+
+type MCPContext struct {
+	Server    string `json:"server"`
+	Tool      string `json:"tool"`
+	Method    string `json:"method"`
+	Workspace string `json:"workspace,omitempty"`
 }
 
 type TraceContext struct {
@@ -30,6 +38,7 @@ type DecisionRequest struct {
 	Tenant TenantContext `json:"tenant"`
 	Actor  Actor         `json:"actor"`
 	Tool   Tool          `json:"tool"`
+	MCP    *MCPContext   `json:"mcp,omitempty"`
 	Trace  *TraceContext `json:"trace,omitempty"`
 }
 

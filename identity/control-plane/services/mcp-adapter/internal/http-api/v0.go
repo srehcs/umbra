@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -22,6 +23,19 @@ import (
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/receipts"
 	stor "github.com/umbra-labs/agent-identity-control-plane/packages/go/storage"
 	dbstore "github.com/umbra-labs/agent-identity-control-plane/services/mcp-adapter/internal/storage"
+)
+
+const (
+	maxActorIDLen       = 128
+	maxActorTypeLen     = 32
+	maxActorSourceLen   = 32
+	maxRoleLen          = 64
+	maxRoleCount        = 32
+	maxServerLen        = 200
+	maxToolLen          = 200
+	maxMethodLen        = 64
+	maxWorkspaceLen     = 200
+	maxSchemaVersionLen = 64
 )
 
 type PDPClient struct {
@@ -98,21 +112,31 @@ type rpcError struct {
 }
 
 type toolCallParams struct {
-	Name      string                 `json:"name"`
-	Arguments map[string]interface{} `json:"arguments,omitempty"`
-	Server    string                 `json:"server,omitempty"`
-	RequestID string                 `json:"request_id,omitempty"`
+	Name              string                 `json:"name"`
+	Arguments         map[string]interface{} `json:"arguments,omitempty"`
+	Server            string                 `json:"server,omitempty"`
+	RequestID         string                 `json:"request_id,omitempty"`
+	Workspace         string                 `json:"workspace,omitempty"`
+	ArgsSchemaVersion string                 `json:"args_schema_version,omitempty"`
+	Actor             *actorParams           `json:"actor,omitempty"`
 }
 
 type invocationMeta struct {
-	ArgKeys  []string `json:"arg_keys,omitempty"`
-	ArgCount int      `json:"arg_count,omitempty"`
+	ArgSizeBytes     int    `json:"arg_size_bytes,omitempty"`
+	ArgSchemaVersion string `json:"arg_schema_version,omitempty"`
+	ContentHash      string `json:"content_hash,omitempty"`
 }
 
 type invocationReceiptBody struct {
-	ToolServer     string          `json:"tool_server,omitempty"`
-	ToolName       string          `json:"tool_name"`
-	ToolMethod     string          `json:"tool_method"`
+	ActorID        string          `json:"actor.id,omitempty"`
+	ActorType      string          `json:"actor.type,omitempty"`
+	ActorRoles     []string        `json:"actor.roles"`
+	ActorSource    string          `json:"actor.source,omitempty"`
+	ActorRoleCount int             `json:"actor.role_count,omitempty"`
+	MCPServer      string          `json:"mcp.server,omitempty"`
+	MCPTool        string          `json:"mcp.tool,omitempty"`
+	MCPMethod      string          `json:"mcp.method,omitempty"`
+	Workspace      string          `json:"workspace,omitempty"`
 	Outcome        string          `json:"outcome"`
 	StatusCode     *int            `json:"status_code,omitempty"`
 	PDPLatencyMs   int             `json:"pdp_latency_ms"`
@@ -135,9 +159,22 @@ type mcpHandler struct {
 	pepMode       string
 	upstreamURL   string
 	defaultTenant uuid.UUID
-	actorID       string
-	actorRoles    []string
+	defaultActor  actorIdentity
 	serverName    string
+}
+
+type actorParams struct {
+	ID     string   `json:"id,omitempty"`
+	Type   string   `json:"type,omitempty"`
+	Roles  []string `json:"roles,omitempty"`
+	Source string   `json:"source,omitempty"`
+}
+
+type actorIdentity struct {
+	ID     string
+	Type   string
+	Roles  []string
+	Source string
 }
 
 func registerV0(mux *http.ServeMux, logger *slog.Logger) {
@@ -170,7 +207,8 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 	}
 
 	actorID := strings.TrimSpace(getenv("MCP_ACTOR_ID", "user-1"))
-	roles := parseCSV(getenv("MCP_ACTOR_ROLES", "developer"))
+	actorType := strings.TrimSpace(getenv("MCP_ACTOR_TYPE", "agent"))
+	roles := parseCSV(getenv("MCP_ACTOR_ROLES", ""))
 	serverName := strings.TrimSpace(getenv("MCP_SERVER_NAME", "mcp.default"))
 
 	db, err := stor.Connect(context.Background(), getenv("DATABASE_URL", "postgres://umbra:umbra@postgres:5432/umbra?sslmode=disable"))
@@ -191,8 +229,12 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 		pepMode:       pepMode,
 		upstreamURL:   upstreamURL,
 		defaultTenant: tenantID,
-		actorID:       actorID,
-		actorRoles:    roles,
+		defaultActor: actorIdentity{
+			ID:     actorID,
+			Type:   actorType,
+			Roles:  roles,
+			Source: "dev",
+		},
 		serverName:    serverName,
 	}
 
@@ -228,7 +270,11 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	toolName := strings.TrimSpace(params.Name)
+	toolName, err := normalizeIdentifier(params.Name, maxToolLen, false)
+	if err != nil {
+		writeRPCError(w, http.StatusBadRequest, req.ID, "tool name too long", "CONTEXT_TOO_LARGE", "")
+		return
+	}
 	if toolName == "" {
 		writeRPCError(w, http.StatusBadRequest, req.ID, "missing tool name", "BAD_PARAMS", "")
 		return
@@ -243,12 +289,47 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 		params.RequestID = requestID
 	}
 
-	serverName := strings.TrimSpace(params.Server)
+	serverName, err := normalizeServerIdentifier(params.Server, maxServerLen)
+	if err != nil {
+		writeRPCError(w, http.StatusBadRequest, req.ID, "server id too long", "CONTEXT_TOO_LARGE", requestID)
+		return
+	}
 	if serverName == "" {
-		serverName = h.serverName
+		serverName, err = normalizeServerIdentifier(h.serverName, maxServerLen)
+		if err != nil {
+			writeRPCError(w, http.StatusBadRequest, req.ID, "server id too long", "CONTEXT_TOO_LARGE", requestID)
+			return
+		}
 	}
 
-	meta := buildInvocationMeta(params.Arguments)
+	workspace, err := normalizeIdentifier(params.Workspace, maxWorkspaceLen, false)
+	if err != nil {
+		writeRPCError(w, http.StatusBadRequest, req.ID, "workspace too long", "CONTEXT_TOO_LARGE", requestID)
+		return
+	}
+	if workspace == "" {
+		if headerWorkspace := strings.TrimSpace(r.Header.Get("x-umbra-workspace")); headerWorkspace != "" {
+			workspace, err = normalizeIdentifier(headerWorkspace, maxWorkspaceLen, false)
+			if err != nil {
+				writeRPCError(w, http.StatusBadRequest, req.ID, "workspace too long", "CONTEXT_TOO_LARGE", requestID)
+				return
+			}
+		}
+	}
+
+	argSchemaVersion := strings.TrimSpace(params.ArgsSchemaVersion)
+	if argSchemaVersion != "" && len(argSchemaVersion) > maxSchemaVersionLen {
+		writeRPCError(w, http.StatusBadRequest, req.ID, "args schema version too long", "CONTEXT_TOO_LARGE", requestID)
+		return
+	}
+
+	meta := buildInvocationMeta(params.Arguments, argSchemaVersion)
+
+	actor, err := resolveActor(r, params, h.defaultActor)
+	if err != nil {
+		writeRPCError(w, http.StatusBadRequest, req.ID, "actor identity too long", "CONTEXT_TOO_LARGE", requestID)
+		return
+	}
 
 	tenantID := h.defaultTenant
 	if headerTenant := strings.TrimSpace(r.Header.Get("x-umbra-tenant-id")); headerTenant != "" {
@@ -272,16 +353,30 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 		spanID = sc.SpanID().String()
 	}
 
-	logger := h.logger.With("request_id", requestID)
+	logger := h.logger.With(
+		"request_id", requestID,
+		"actor_id", actor.ID,
+		"actor_type", actor.Type,
+		"actor_source", actor.Source,
+	)
 	if traceID != "" {
 		logger = logger.With("trace_id", traceID, "span_id", spanID)
+	}
+
+	mcpMethod, err := normalizeIdentifier(req.Method, maxMethodLen, true)
+	if err != nil {
+		writeRPCError(w, http.StatusBadRequest, req.ID, "method too long", "CONTEXT_TOO_LARGE", requestID)
+		return
 	}
 
 	span.SetAttributes(
 		attribute.String("umbra.tenant_id", tenantID.String()),
 		attribute.String("umbra.request_id", requestID),
-		attribute.String("mcp.method", req.Method),
+		attribute.String("mcp.method", mcpMethod),
 		attribute.String("mcp.tool", toolName),
+		attribute.String("mcp.server", serverName),
+		attribute.String("umbra.actor_id", actor.ID),
+		attribute.String("umbra.actor_type", actor.Type),
 	)
 
 	started := time.Now()
@@ -295,13 +390,31 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 
 	decisionReq := protocol.DecisionRequest{
 		Tenant: protocol.TenantContext{TenantID: tenantID.String()},
-		Actor:  protocol.Actor{Type: "user", ID: h.actorID, Roles: h.actorRoles},
+		Actor: protocol.Actor{
+			Type:   actor.Type,
+			ID:     actor.ID,
+			Roles:  actor.Roles,
+			Source: actor.Source,
+		},
 		Tool: protocol.Tool{
 			Name:     toolName,
-			Method:   req.Method,
+			Method:   mcpMethod,
 			Endpoint: toolEndpoint(serverName, toolName),
 		},
+		MCP: &protocol.MCPContext{
+			Server:    serverName,
+			Tool:      toolName,
+			Method:    mcpMethod,
+			Workspace: workspace,
+		},
 		Trace: traceCtx,
+	}
+
+	mcpCtx := protocol.MCPContext{
+		Server:    serverName,
+		Tool:      toolName,
+		Method:    mcpMethod,
+		Workspace: workspace,
 	}
 
 	decision, status, err := h.pdp.Decide(ctx, decisionReq)
@@ -354,7 +467,7 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 	if forward {
 		forwardBody, err := buildForwardBody(req, params)
 		if err != nil {
-			writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, serverName, toolName, req.Method, outcome, intPtr(http.StatusBadRequest), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
+			writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, outcome, intPtr(http.StatusBadRequest), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
 			writeRPCError(w, http.StatusBadRequest, req.ID, "invalid request", "BAD_REQUEST", requestID)
 			return
 		}
@@ -362,7 +475,7 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 		toolStarted := time.Now()
 		toolReq, err := http.NewRequestWithContext(ctx, http.MethodPost, h.upstreamURL, bytes.NewReader(forwardBody))
 		if err != nil {
-			writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, serverName, toolName, req.Method, "error", intPtr(http.StatusBadGateway), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
+			writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, "error", intPtr(http.StatusBadGateway), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
 			writeRPCError(w, http.StatusBadGateway, req.ID, "upstream unavailable", "UPSTREAM_UNAVAILABLE", requestID)
 			return
 		}
@@ -371,7 +484,7 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 		toolRes, err := h.toolClient.Do(toolReq)
 		toolLatency = int(time.Since(toolStarted).Milliseconds())
 		if err != nil {
-			writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, serverName, toolName, req.Method, "error", intPtr(http.StatusBadGateway), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
+			writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, "error", intPtr(http.StatusBadGateway), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
 			writeRPCError(w, http.StatusBadGateway, req.ID, "upstream error", "UPSTREAM_ERROR", requestID)
 			return
 		}
@@ -385,14 +498,14 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 				outcome = "error"
 			}
 		}
-		writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, serverName, toolName, req.Method, outcome, toolStatus, pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
+		writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, outcome, toolStatus, pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
 		w.Header().Set("content-type", "application/json")
 		w.WriteHeader(toolRes.StatusCode)
 		_, _ = w.Write(toolBody)
 		return
 	}
 
-	writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, serverName, toolName, req.Method, outcome, intPtr(statusCode), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
+writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, outcome, intPtr(statusCode), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
 
 	if err != nil {
 		writeRPCError(w, http.StatusServiceUnavailable, req.ID, "policy unavailable", "POLICY_UNAVAILABLE", requestID)
@@ -415,28 +528,41 @@ func buildForwardBody(req rpcRequest, params toolCallParams) ([]byte, error) {
 	return json.Marshal(out)
 }
 
-func buildInvocationMeta(args map[string]interface{}) *invocationMeta {
-	if len(args) == 0 {
+func buildInvocationMeta(args map[string]interface{}, schemaVersion string) *invocationMeta {
+	if len(args) == 0 && schemaVersion == "" {
 		return nil
 	}
-	keys := make([]string, 0, len(args))
-	for k := range args {
-		keys = append(keys, k)
+
+	meta := &invocationMeta{ArgSchemaVersion: schemaVersion}
+	if len(args) == 0 {
+		return meta
 	}
-	sort.Strings(keys)
-	return &invocationMeta{ArgKeys: keys, ArgCount: len(keys)}
+
+	b, err := json.Marshal(args)
+	if err != nil {
+		return meta
+	}
+	meta.ArgSizeBytes = len(b)
+	meta.ContentHash = receipts.HashBytes(b)
+	return meta
 }
 
-func writeInvocationReceipt(ctx context.Context, logger *slog.Logger, store invocationStore, tenant uuid.UUID, decisionID *uuid.UUID, requestID, serverName, toolName, method, outcome string, statusCode *int, pdpLatency, toolLatency, totalLatency int, meta *invocationMeta, started time.Time, pepMode, enforcement, pdpStatus, traceID, spanID string) {
+func writeInvocationReceipt(ctx context.Context, logger *slog.Logger, store invocationStore, tenant uuid.UUID, decisionID *uuid.UUID, requestID string, actor actorIdentity, mcpCtx protocol.MCPContext, outcome string, statusCode *int, pdpLatency, toolLatency, totalLatency int, meta *invocationMeta, started time.Time, pepMode, enforcement, pdpStatus, traceID, spanID string) {
 	if store == nil {
 		logger.Warn("invocation receipt skipped (no store)")
 		return
 	}
 
 	rb := invocationReceiptBody{
-		ToolServer:     serverName,
-		ToolName:       toolName,
-		ToolMethod:     method,
+		ActorID:        actor.ID,
+		ActorType:      actor.Type,
+		ActorRoles:     actor.Roles,
+		ActorSource:    actor.Source,
+		ActorRoleCount: len(actor.Roles),
+		MCPServer:      mcpCtx.Server,
+		MCPTool:        mcpCtx.Tool,
+		MCPMethod:      mcpCtx.Method,
+		Workspace:      mcpCtx.Workspace,
 		Outcome:        outcome,
 		StatusCode:     statusCode,
 		PDPLatencyMs:   pdpLatency,
@@ -463,7 +589,7 @@ func writeInvocationReceipt(ctx context.Context, logger *slog.Logger, store invo
 	}
 
 	hash := receipts.HashBytes(append([]byte(prev), bodyBytes...))
-	if err := store.InsertInvocationReceipt(ctx, tenant, decisionID, requestID, toolIdentifier(serverName, toolName), method, toolName, outcome, statusCode, totalLatency, bodyBytes, prev, hash, traceID, spanID); err != nil {
+	if err := store.InsertInvocationReceipt(ctx, tenant, decisionID, requestID, toolIdentifier(mcpCtx.Server, mcpCtx.Tool), mcpCtx.Method, mcpCtx.Tool, outcome, statusCode, totalLatency, bodyBytes, prev, hash, traceID, spanID); err != nil {
 		logger.Error("receipt insert failed", "err", err)
 	}
 }
@@ -536,4 +662,175 @@ func getenv(k, d string) string {
 		return v
 	}
 	return d
+}
+
+func normalizeIdentifier(value string, maxLen int, lower bool) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", nil
+	}
+	if lower {
+		trimmed = strings.ToLower(trimmed)
+	}
+	if len(trimmed) > maxLen {
+		return "", fmt.Errorf("identifier too long")
+	}
+	return trimmed, nil
+}
+
+func normalizeServerIdentifier(value string, maxLen int) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", nil
+	}
+	if strings.Contains(trimmed, "://") {
+		if parsed, err := url.Parse(trimmed); err == nil && parsed.Host != "" {
+			trimmed = parsed.Host
+		}
+	}
+	if idx := strings.Index(trimmed, "/"); idx >= 0 {
+		trimmed = trimmed[:idx]
+	}
+	trimmed = strings.ToLower(strings.TrimSpace(trimmed))
+	if len(trimmed) > maxLen {
+		return "", fmt.Errorf("server identifier too long")
+	}
+	return trimmed, nil
+}
+
+func resolveActor(r *http.Request, params toolCallParams, def actorIdentity) (actorIdentity, error) {
+	actor := def
+	actorSourceHint := ""
+	hasExplicit := false
+
+	if params.Actor != nil {
+		hasExplicit = true
+		if params.Actor.ID != "" {
+			actor.ID = params.Actor.ID
+		}
+		if params.Actor.Type != "" {
+			actor.Type = params.Actor.Type
+		}
+		if params.Actor.Source != "" {
+			actorSourceHint = params.Actor.Source
+		} else {
+			actorSourceHint = "mcp"
+		}
+		if params.Actor.Roles != nil {
+			actor.Roles = params.Actor.Roles
+		} else if hasExplicit {
+			actor.Roles = []string{}
+		}
+	} else {
+		headerID := strings.TrimSpace(r.Header.Get("x-umbra-actor-id"))
+		headerType := strings.TrimSpace(r.Header.Get("x-umbra-actor-type"))
+		headerRoles := parseCSV(r.Header.Get("x-umbra-actor-roles"))
+		headerSource := strings.TrimSpace(r.Header.Get("x-umbra-actor-source"))
+		if headerID != "" || headerType != "" || len(headerRoles) > 0 || headerSource != "" {
+			hasExplicit = true
+			if headerID != "" {
+				actor.ID = headerID
+			}
+			if headerType != "" {
+				actor.Type = headerType
+			}
+			if headerSource != "" {
+				actorSourceHint = headerSource
+			} else {
+				actorSourceHint = "header"
+			}
+			if len(headerRoles) > 0 {
+				actor.Roles = headerRoles
+			} else {
+				actor.Roles = []string{}
+			}
+		}
+	}
+
+	if actor.ID != "" && len(actor.ID) > maxActorIDLen {
+		return actorIdentity{}, fmt.Errorf("actor id too long")
+	}
+	if actor.Type != "" && len(actor.Type) > maxActorTypeLen {
+		return actorIdentity{}, fmt.Errorf("actor type too long")
+	}
+	if actorSourceHint != "" && len(actorSourceHint) > maxActorSourceLen {
+		return actorIdentity{}, fmt.Errorf("actor source too long")
+	}
+
+	if actor.ID == "" {
+		actor.ID = def.ID
+	}
+
+	actor.Type = normalizeActorType(actor.Type, def.Type)
+	actor.Source = normalizeActorSource(actorSourceHint, def.Source, hasExplicit)
+
+	if len(actor.ID) > maxActorIDLen {
+		return actorIdentity{}, fmt.Errorf("actor id too long")
+	}
+	if len(actor.Type) > maxActorTypeLen {
+		return actorIdentity{}, fmt.Errorf("actor type too long")
+	}
+	if len(actor.Source) > maxActorSourceLen {
+		return actorIdentity{}, fmt.Errorf("actor source too long")
+	}
+
+	roles, err := sanitizeRoles(actor.Roles, hasExplicit)
+	if err != nil {
+		return actorIdentity{}, err
+	}
+	actor.Roles = roles
+
+	if actor.Roles == nil {
+		actor.Roles = []string{}
+	}
+
+	return actor, nil
+}
+
+func normalizeActorType(value, fallback string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		normalized = strings.ToLower(strings.TrimSpace(fallback))
+	}
+	if normalized == "user" {
+		return "human"
+	}
+	if normalized == "" {
+		return "agent"
+	}
+	return normalized
+}
+
+func normalizeActorSource(value, fallback string, explicit bool) string {
+	if value != "" {
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+	if explicit {
+		return "mcp"
+	}
+	return strings.ToLower(strings.TrimSpace(fallback))
+}
+
+func sanitizeRoles(roles []string, explicit bool) ([]string, error) {
+	if roles == nil {
+		if explicit {
+			return []string{}, nil
+		}
+		return []string{}, nil
+	}
+	out := make([]string, 0, len(roles))
+	for _, role := range roles {
+		val := strings.TrimSpace(role)
+		if val == "" {
+			continue
+		}
+		if len(val) > maxRoleLen {
+			return nil, fmt.Errorf("role too long")
+		}
+		out = append(out, val)
+		if len(out) > maxRoleCount {
+			return nil, fmt.Errorf("too many roles")
+		}
+	}
+	return out, nil
 }
