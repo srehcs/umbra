@@ -46,4 +46,7 @@ type DecisionResponse struct {
 	RuleIndex     *int         `json:"rule_index,omitempty"`
 	Obligations   []Obligation `json:"obligations,omitempty"`
 	Reason        string       `json:"reason,omitempty"`
+	RequestID     string       `json:"request_id,omitempty"`
+	TraceID       string       `json:"trace_id,omitempty"`
+	SpanID        string       `json:"span_id,omitempty"`
 }

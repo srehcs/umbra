@@ -111,7 +111,7 @@ export default function ReceiptsPage() {
               </div>
               <div className="w-72">
                 <label className="text-xs text-muted-foreground">Filter</label>
-                <Input className="mt-1" placeholder="tool, decision, hash, trace…" value={q} onChange={(e) => setQ(e.target.value)} />
+                <Input className="mt-1" placeholder="tool, decision, request, hash, trace…" value={q} onChange={(e) => setQ(e.target.value)} />
               </div>
             </div>
           </div>
@@ -126,6 +126,7 @@ export default function ReceiptsPage() {
                 <TableHead>Result</TableHead>
                 <TableHead>When</TableHead>
                 <TableHead>Decision</TableHead>
+                <TableHead>Request</TableHead>
                 <TableHead>Hash</TableHead>
                 <TableHead />
               </TableRow>
@@ -137,6 +138,7 @@ export default function ReceiptsPage() {
                   <TableCell>{badgeForOutcome(r)}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{String(r.ts ?? "")}</TableCell>
                   <TableCell className="code text-xs text-muted-foreground truncate max-w-[240px]">{String(r.decision_id ?? "")}</TableCell>
+                  <TableCell className="code text-xs text-muted-foreground truncate max-w-[240px]">{String(r.request_id ?? "")}</TableCell>
                   <TableCell className="code text-xs text-muted-foreground truncate max-w-[240px]">{String(r.hash ?? "")}</TableCell>
                   <TableCell className="text-right">
                     <Dialog>
@@ -175,7 +177,7 @@ export default function ReceiptsPage() {
               ))}
               {items.length === 0 && !loading && (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-sm text-muted-foreground">No receipts yet. Run PEP requests to generate receipts.</TableCell>
+                  <TableCell colSpan={7} className="text-sm text-muted-foreground">No receipts yet. Run PEP requests to generate receipts.</TableCell>
                 </TableRow>
               )}
             </TableBody>
