@@ -78,9 +78,8 @@ This backlog is designed to produce a **demo-worthy vertical slice** while enfor
 
 ### E1-S3 ADR minimum set (no rework)
 **Files**
-- `docs/adr/0005-policy-evaluator-interface.md` (new)
-- `docs/adr/0006-redis-streams-events.md` (new)
-- `docs/adr/0007-service-to-service-auth-plan.md` (new, stub ok)
+- `/docs/adr/0005-policy-evaluator-interface.md` (new)
+- `/docs/adr/0006-redis-streams-events.md` (new)
 
 **Acceptance Criteria**
 - Alternatives + consequences included
@@ -126,7 +125,7 @@ This backlog is designed to produce a **demo-worthy vertical slice** while enfor
 **Files**
 - `services/pdp/internal/decision/*` (new)
 - `services/pdp/internal/storage/*` (new)
-- `services/pdp/internal/httpapi/v0.go`
+- `services/pdp/internal/http-api/v0.go`
 
 **Acceptance Criteria**
 - Loads active policy for tenant
@@ -141,7 +140,7 @@ This backlog is designed to produce a **demo-worthy vertical slice** while enfor
 **Files**
 - `services/pep-gateway/internal/client/*` (new)
 - `services/pep-gateway/internal/receipts/*` (new)
-- `services/pep-gateway/internal/httpapi/v0.go`
+- `services/pep-gateway/internal/http-api/v0.go`
 
 **Acceptance Criteria**
 - Calls PDP w/ timeout + bounded retry
@@ -152,7 +151,7 @@ This backlog is designed to produce a **demo-worthy vertical slice** while enfor
 ### E3-S3 Control Plane CRUD (tools + policies)
 **Files**
 - `services/controlplane-api/internal/storage/*` (new)
-- `services/controlplane-api/internal/httpapi/v0.go`
+- `services/controlplane-api/internal/http-api/v0.go`
 
 **Acceptance Criteria**
 - CRUD for tools/policies is real (tenant-scoped)

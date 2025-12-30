@@ -9,6 +9,7 @@ export type DecisionReceipt = {
   decision_id: UUID;
   decision: "allow" | "deny";
   policy_hash?: string;
+  request_id?: string;
   hash: string;
   prev_hash?: string;
   trace_id?: string;
@@ -20,12 +21,15 @@ export type InvocationReceipt = {
   id: UUID;
   ts: string;
   decision_id: UUID;
+  request_id?: string;
   tool_name: string;
   method: string;
   path: string;
   outcome: "success" | "denied" | "error";
   status_code: number;
   latency_ms: number;
+  policy_hash?: string;
+  policy_version?: number;
   hash: string;
   prev_hash?: string;
   trace_id?: string;
@@ -47,6 +51,8 @@ export type PolicyRow = {
   version: number;
   active: boolean;
   policy_hash: string;
+  policy: Record<string, unknown>;
+  updated_at: string;
 };
 
 export type ListResponse<T> = {

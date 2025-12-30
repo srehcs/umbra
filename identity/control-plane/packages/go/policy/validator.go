@@ -166,6 +166,42 @@ func validateRules(rules []Rule) []ValidationError {
 			}
 		}
 
+		// Validate actor_types_any
+		if rule.ActorTypesAny != nil {
+			for j, val := range rule.ActorTypesAny {
+				if val == "" {
+					errs = append(errs, ValidationError{
+						Path:    fmt.Sprintf("%s.actor_types_any[%d]", prefix, j),
+						Message: "actor type cannot be empty string",
+					})
+				}
+				if len(val) > MaxStringLength {
+					errs = append(errs, ValidationError{
+						Path:    fmt.Sprintf("%s.actor_types_any[%d]", prefix, j),
+						Message: fmt.Sprintf("actor type length %d exceeds maximum of %d", len(val), MaxStringLength),
+					})
+				}
+			}
+		}
+
+		// Validate actor_ids_any
+		if rule.ActorIDsAny != nil {
+			for j, val := range rule.ActorIDsAny {
+				if val == "" {
+					errs = append(errs, ValidationError{
+						Path:    fmt.Sprintf("%s.actor_ids_any[%d]", prefix, j),
+						Message: "actor id cannot be empty string",
+					})
+				}
+				if len(val) > MaxStringLength {
+					errs = append(errs, ValidationError{
+						Path:    fmt.Sprintf("%s.actor_ids_any[%d]", prefix, j),
+						Message: fmt.Sprintf("actor id length %d exceeds maximum of %d", len(val), MaxStringLength),
+					})
+				}
+			}
+		}
+
 		// Validate methods_any
 		if rule.MethodsAny != nil {
 			for j, method := range rule.MethodsAny {
@@ -199,11 +235,65 @@ func validateRules(rules []Rule) []ValidationError {
 			}
 		}
 
+		// Validate mcp_servers_any
+		if rule.MCPServersAny != nil {
+			for j, val := range rule.MCPServersAny {
+				if val == "" {
+					errs = append(errs, ValidationError{
+						Path:    fmt.Sprintf("%s.mcp_servers_any[%d]", prefix, j),
+						Message: "mcp server cannot be empty string",
+					})
+				}
+				if len(val) > MaxStringLength {
+					errs = append(errs, ValidationError{
+						Path:    fmt.Sprintf("%s.mcp_servers_any[%d]", prefix, j),
+						Message: fmt.Sprintf("mcp server length %d exceeds maximum of %d", len(val), MaxStringLength),
+					})
+				}
+			}
+		}
+
+		// Validate mcp_tools_any
+		if rule.MCPToolsAny != nil {
+			for j, val := range rule.MCPToolsAny {
+				if val == "" {
+					errs = append(errs, ValidationError{
+						Path:    fmt.Sprintf("%s.mcp_tools_any[%d]", prefix, j),
+						Message: "mcp tool cannot be empty string",
+					})
+				}
+				if len(val) > MaxStringLength {
+					errs = append(errs, ValidationError{
+						Path:    fmt.Sprintf("%s.mcp_tools_any[%d]", prefix, j),
+						Message: fmt.Sprintf("mcp tool length %d exceeds maximum of %d", len(val), MaxStringLength),
+					})
+				}
+			}
+		}
+
+		// Validate mcp_methods_any
+		if rule.MCPMethodsAny != nil {
+			for j, val := range rule.MCPMethodsAny {
+				if val == "" {
+					errs = append(errs, ValidationError{
+						Path:    fmt.Sprintf("%s.mcp_methods_any[%d]", prefix, j),
+						Message: "mcp method cannot be empty string",
+					})
+				}
+				if len(val) > MaxStringLength {
+					errs = append(errs, ValidationError{
+						Path:    fmt.Sprintf("%s.mcp_methods_any[%d]", prefix, j),
+						Message: fmt.Sprintf("mcp method length %d exceeds maximum of %d", len(val), MaxStringLength),
+					})
+				}
+			}
+		}
+
 		// At least one condition should be specified
-		if len(rule.RolesAny) == 0 && len(rule.MethodsAny) == 0 && rule.PathPrefix == "" {
+		if len(rule.RolesAny) == 0 && len(rule.MethodsAny) == 0 && rule.PathPrefix == "" && len(rule.ActorTypesAny) == 0 && len(rule.ActorIDsAny) == 0 && len(rule.MCPServersAny) == 0 && len(rule.MCPToolsAny) == 0 && len(rule.MCPMethodsAny) == 0 {
 			errs = append(errs, ValidationError{
 				Path:    prefix,
-				Message: "rule must specify at least one of: roles_any, methods_any, or path_prefix",
+				Message: "rule must specify at least one condition",
 			})
 		}
 	}

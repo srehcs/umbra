@@ -47,7 +47,7 @@ $COMPOSE exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -c "
 "
 
 echo "[seed] Seeding policies..."
-POLICY_JSON='{"version":1,"mode":"abac_v0","rules":[{"effect":"allow","roles_any":["admin","developer"],"methods_any":["GET"],"path_prefix":"/demo"}],"default":"deny"}'
+POLICY_JSON='{"version":1,"mode":"abac_v0","rules":[{"effect":"deny","mcp_servers_any":["demo.mcp"],"mcp_tools_any":["demo.secret"],"mcp_methods_any":["tools/call"]},{"effect":"allow","mcp_servers_any":["demo.mcp"],"mcp_tools_any":["demo.safe"],"mcp_methods_any":["tools/call"]},{"effect":"allow","roles_any":["admin","developer"],"methods_any":["GET"],"path_prefix":"/demo"}],"default":"deny"}'
 
 $COMPOSE exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -c "
   WITH p AS (

@@ -36,7 +36,7 @@ This is the working list of the highest risks for V0-C. Update as we learn.
 
 ## R9: Supply-chain compromise (deps/build)
 - **Impact:** high
-- **Mitigation:** CI scans (OSV, Trivy, gitleaks); provenance stub now; enable keyless later
+- **Mitigation:** CI scans (OSV, Trivy, gitleaks); add provenance and enable keyless later
 
 ## R10: Inconsistent contracts (docs drift from code)
 - **Impact:** medium

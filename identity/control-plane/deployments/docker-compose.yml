@@ -22,6 +22,13 @@ services:
     ports:
       - "9000:9000"
 
+  mcp-upstream:
+    build: ../services/mcp-upstream
+    environment:
+      PORT: "8090"
+    ports:
+      - "8090:8090"
+
   jaeger:
     image: jaegertracing/all-in-one:1.61
     ports:
@@ -84,6 +91,28 @@ services:
       - postgres
       - otel-collector
       - upstream-sample
+
+  mcp-adapter:
+    build: ../services/mcp-adapter
+    environment:
+      UMBRA_ENV: dev
+      PEP_MODE: observe
+      PDP_URL: http://pdp:8081
+      MCP_UPSTREAM_URL: http://mcp-upstream:8090/mcp
+      MCP_TENANT_ID: 00000000-0000-0000-0000-000000000001
+      MCP_ACTOR_ID: user-1
+      MCP_ACTOR_ROLES: developer
+      MCP_SERVER_NAME: demo.mcp
+      DATABASE_URL: postgres://umbra:umbra@postgres:5432/umbra?sslmode=disable
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      PORT: "8083"
+    ports:
+      - "8083:8083"
+    depends_on:
+      - pdp
+      - postgres
+      - otel-collector
+      - mcp-upstream
 
   ui:
     build: ../ui

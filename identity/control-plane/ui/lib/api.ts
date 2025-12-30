@@ -39,8 +39,18 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     }),
+  updatePolicy: (id: string, body: { policy: unknown }) =>
+    request<{ id: string }>(`/v1/policies/${id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   activatePolicy: (id: string) =>
     request<{ ok: true }>(`/v1/policies/${id}/activate`, { method: "POST" }),
+  getActivePolicy: () =>
+    request<{ id: string; name: string; version: number; policy_hash: string; updated_at: string }>(
+      "/v1/policies/active",
+    ),
 
   // Receipts
   listReceipts: (params: { limit?: number; kind?: string; q?: string; before?: string } = {}) => {

@@ -17,6 +17,15 @@ V0 demo flow:
 ## “Definition of Done”
 See `docs/process/definition-of-done.md`.
 
+## Local verification (minimum bar)
+From `identity/control-plane/`:
+
+```bash
+make verify
+```
+
+Runs gofmt check, `go vet`, `go test ./...`, plus `pnpm` lint/build.
+
 ## PR hygiene
 - Small PRs
 - ADR required for interface/trust-boundary/data-model changes
