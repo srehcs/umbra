@@ -22,7 +22,7 @@ function badgeForOutcome(r: Receipt) {
     if (r.outcome === "denied") return <Badge variant="warning">denied</Badge>;
     return <Badge variant="danger">error</Badge>;
   }
-  return <Badge variant="outline">{r.kind}</Badge>;
+  return <Badge variant="outline">unknown</Badge>;
 }
 
 export default function ReceiptsPage() {
@@ -41,11 +41,13 @@ export default function ReceiptsPage() {
     setLoading(true);
     setError(null);
     try {
+      const qValue = q.trim();
+      const beforeValue = reset ? undefined : nextBefore;
       const data = await api.listReceipts({
         limit: 50,
         kind,
-        q: q.trim() ? q.trim() : undefined,
-        before: reset ? undefined : nextBefore,
+        ...(qValue ? { q: qValue } : {}),
+        ...(beforeValue ? { before: beforeValue } : {}),
       }, signal);
 
       const newItems = data.items ?? [];
