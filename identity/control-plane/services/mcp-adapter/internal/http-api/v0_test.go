@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,6 +30,7 @@ type receiptCapture struct {
 	enforcement string
 	pdpStatus   string
 	body        invocationReceiptBody
+	rawBody     json.RawMessage
 }
 
 func (s *captureStore) LastInvocationHash(_ context.Context, _ uuid.UUID) (string, error) {
@@ -45,6 +47,7 @@ func (s *captureStore) InsertInvocationReceipt(_ context.Context, _ uuid.UUID, d
 		enforcement: parsed.Enforcement,
 		pdpStatus:   parsed.PDPStatus,
 		body:        parsed,
+		rawBody:     body,
 	}
 	return nil
 }
@@ -62,8 +65,12 @@ func newTestHandler(t *testing.T, pepMode string, pdpURL string, upstreamURL str
 		pepMode:       pepMode,
 		upstreamURL:   upstreamURL,
 		defaultTenant: uuid.MustParse("00000000-0000-0000-0000-000000000001"),
-		actorID:       "user-1",
-		actorRoles:    []string{"developer"},
+		defaultActor: actorIdentity{
+			ID:     "user-1",
+			Type:   "agent",
+			Roles:  []string{"developer"},
+			Source: "dev",
+		},
 		serverName:    "mcp.test",
 	}
 }
@@ -126,6 +133,12 @@ func TestMCPAllowForwardedReceipt(t *testing.T) {
 	}
 	if store.last.body.PDPLatencyMs < 0 {
 		t.Fatalf("expected pdp latency set")
+	}
+	if store.last.body.ActorID == "" || store.last.body.ActorType == "" {
+		t.Fatalf("expected actor identity in receipt")
+	}
+	if store.last.body.ActorRoles == nil {
+		t.Fatalf("expected actor roles in receipt")
 	}
 }
 
@@ -221,5 +234,116 @@ func TestMCPPDPUnavailableByMode(t *testing.T) {
 				t.Fatalf("expected blocked enforcement")
 			}
 		})
+	}
+}
+
+func TestMCPActorIdentityFromParams(t *testing.T) {
+	pdpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := protocol.DecisionResponse{
+			Decision:   "allow",
+			DecisionID: uuid.NewString(),
+			Reason:     "ok",
+		}
+		w.Header().Set("content-type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer pdpServer.Close()
+
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":4,"result":{"ok":true}}`))
+	}))
+	defer upstreamServer.Close()
+
+	store := &captureStore{}
+	h := newTestHandler(t, "enforce", pdpServer.URL, upstreamServer.URL, store)
+
+	reqBody := []byte(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"demo.tool","actor":{"id":"human-1","type":"human","roles":["admin"],"source":"client"}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(reqBody))
+	rec := httptest.NewRecorder()
+
+	h.handleMCP(rec, req)
+
+	res := rec.Result()
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("expected 200, got %d: %s", res.StatusCode, string(body))
+	}
+	if store.last.body.ActorID != "human-1" {
+		t.Fatalf("expected actor id human-1, got %s", store.last.body.ActorID)
+	}
+	if store.last.body.ActorType != "human" {
+		t.Fatalf("expected actor type human, got %s", store.last.body.ActorType)
+	}
+	if store.last.body.ActorSource != "client" {
+		t.Fatalf("expected actor source client, got %s", store.last.body.ActorSource)
+	}
+	if len(store.last.body.ActorRoles) != 1 || store.last.body.ActorRoles[0] != "admin" {
+		t.Fatalf("expected actor roles admin, got %v", store.last.body.ActorRoles)
+	}
+}
+
+func TestMCPArgsRedactionInReceipt(t *testing.T) {
+	pdpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := protocol.DecisionResponse{
+			Decision:   "allow",
+			DecisionID: uuid.NewString(),
+			Reason:     "ok",
+		}
+		w.Header().Set("content-type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer pdpServer.Close()
+
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":5,"result":{"ok":true}}`))
+	}))
+	defer upstreamServer.Close()
+
+	store := &captureStore{}
+	h := newTestHandler(t, "enforce", pdpServer.URL, upstreamServer.URL, store)
+
+	reqBody := []byte(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"demo.tool","arguments":{"password":"secret","nested":{"token":"abc"}}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(reqBody))
+	rec := httptest.NewRecorder()
+
+	h.handleMCP(rec, req)
+
+	if bytes.Contains(store.last.rawBody, []byte("password")) || bytes.Contains(store.last.rawBody, []byte("arguments")) {
+		t.Fatalf("expected args redacted from receipt body")
+	}
+}
+
+func TestMCPContextTooLarge(t *testing.T) {
+	pdpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := protocol.DecisionResponse{
+			Decision:   "allow",
+			DecisionID: uuid.NewString(),
+			Reason:     "ok",
+		}
+		w.Header().Set("content-type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer pdpServer.Close()
+
+	store := &captureStore{}
+	h := newTestHandler(t, "enforce", pdpServer.URL, "http://127.0.0.1:1", store)
+
+	oversized := strings.Repeat("x", maxServerLen+1)
+	reqBody := []byte(`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"demo.tool","server":"` + oversized + `"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(reqBody))
+	rec := httptest.NewRecorder()
+
+	h.handleMCP(rec, req)
+
+	res := rec.Result()
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("expected 400, got %d: %s", res.StatusCode, string(body))
 	}
 }

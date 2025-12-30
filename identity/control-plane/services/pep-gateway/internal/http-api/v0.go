@@ -194,12 +194,17 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 		}
 
 		actorID := strings.TrimSpace(r.Header.Get("x-umbra-actor-id"))
+		actorSource := "dev"
 		if actorID == "" {
 			actorID = "user-1"
+		} else {
+			actorSource = "header"
 		}
 		roles := parseCSV(r.Header.Get("x-umbra-actor-roles"))
 		if len(roles) == 0 {
 			roles = []string{"developer"}
+		} else {
+			actorSource = "header"
 		}
 
 		// The upstream path we proxy (strip /tool prefix).
@@ -227,7 +232,7 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 
 		payload := protocol.DecisionRequest{
 			Tenant: protocol.TenantContext{TenantID: tenantID.String()},
-			Actor:  protocol.Actor{Type: "user", ID: actorID, Roles: roles},
+			Actor:  protocol.Actor{Type: "human", ID: actorID, Roles: roles, Source: actorSource},
 			Tool: protocol.Tool{
 				Name:     toolName,
 				Method:   r.Method,

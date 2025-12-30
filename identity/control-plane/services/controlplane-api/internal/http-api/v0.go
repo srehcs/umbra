@@ -238,9 +238,14 @@ func (s *Server) handleSimulatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
+		ActorID    string          `json:"actor_id,omitempty"`
+		ActorType  string          `json:"actor_type,omitempty"`
 		ActorRoles []string        `json:"actor_roles"`
 		Method     string          `json:"method"`
 		Path       string          `json:"path"`
+		MCPServer  string          `json:"mcp_server,omitempty"`
+		MCPTool    string          `json:"mcp_tool,omitempty"`
+		MCPMethod  string          `json:"mcp_method,omitempty"`
 		Policy     json.RawMessage `json:"policy,omitempty"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
@@ -309,7 +314,16 @@ func (s *Server) handleSimulatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	decision := policy.EvaluateABACV0(body.ActorRoles, body.Method, body.Path, pol)
+	decision := policy.EvaluateABACV0(policy.RequestContext{
+		ActorID:    body.ActorID,
+		ActorType:  body.ActorType,
+		ActorRoles: body.ActorRoles,
+		Method:     body.Method,
+		Path:       body.Path,
+		MCPServer:  body.MCPServer,
+		MCPTool:    body.MCPTool,
+		MCPMethod:  body.MCPMethod,
+	}, pol)
 
 	response := map[string]interface{}{
 		"decision":       decision.Decision,

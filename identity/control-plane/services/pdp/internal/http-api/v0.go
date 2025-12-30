@@ -137,7 +137,22 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 			return
 		}
 
-		d := policy.EvaluateABACV0(req.Actor.Roles, req.Tool.Method, req.Tool.Endpoint, pol)
+		var mcpServer, mcpTool, mcpMethod string
+		if req.MCP != nil {
+			mcpServer = req.MCP.Server
+			mcpTool = req.MCP.Tool
+			mcpMethod = req.MCP.Method
+		}
+		d := policy.EvaluateABACV0(policy.RequestContext{
+			ActorID:    req.Actor.ID,
+			ActorType:  req.Actor.Type,
+			ActorRoles: req.Actor.Roles,
+			Method:     req.Tool.Method,
+			Path:       req.Tool.Endpoint,
+			MCPServer:  mcpServer,
+			MCPTool:    mcpTool,
+			MCPMethod:  mcpMethod,
+		}, pol)
 
 		decisionID := uuid.New()
 		resp := protocol.DecisionResponse{
