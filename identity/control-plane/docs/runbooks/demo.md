@@ -52,6 +52,11 @@ Expected:
 curl -s -H "x-umbra-tenant-id: $TENANT_A" http://localhost:8080/v1/receipts | jq .
 ```
 
+## 4a) Verify receipt integrity
+```bash
+curl -s -X POST -H "x-umbra-tenant-id: $TENANT_A" "http://localhost:8080/v1/receipts/verify?kind=all&limit=100" | jq .
+```
+
 ## 5) View traces
 Open Jaeger:
 - http://localhost:16686

@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 COMPOSE := docker compose -f deployments/docker-compose.yml
 
-.PHONY: bootstrap fmt lint test gen up down logs dev seed docker-build verify migrate verify
+.PHONY: bootstrap fmt lint test gen up down logs dev seed docker-build verify migrate receipts-verify
 
 bootstrap:
 	@echo "Bootstrap: go mod tidy (optional) + ui deps"
@@ -61,3 +61,14 @@ migrate:
 
 verify:
 	@bash scripts/dev/verify_local.sh
+
+# Verify receipt hash chains (decision/invocation) via API.
+receipts-verify:
+	@TENANT_ID=$${TENANT_ID:-} ; \
+	if [ -z "$$TENANT_ID" ]; then \
+		echo "TENANT_ID is required (set it to the seeded tenant UUID)"; \
+		exit 1; \
+	fi ; \
+	KIND=$${KIND:-all} ; \
+	LIMIT=$${LIMIT:-100} ; \
+	curl -s -X POST -H "x-umbra-tenant-id: $$TENANT_ID" "http://localhost:8080/v1/receipts/verify?kind=$$KIND&limit=$$LIMIT" | jq .

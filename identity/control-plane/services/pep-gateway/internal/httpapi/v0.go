@@ -77,16 +77,16 @@ type demoInvokeRequest struct {
 }
 
 type invocationReceiptBody struct {
-	Tool       string            `json:"tool"`
-	Method     string            `json:"method"`
-	Path       string            `json:"path"`
-	Outcome    string            `json:"outcome"`
-	StatusCode *int              `json:"status_code,omitempty"`
-	LatencyMs  int               `json:"latency_ms"`
-	Meta       map[string]string `json:"meta,omitempty"`
-	StartedAt  string            `json:"started_at"` // RFC3339
-	PEPMode    string            `json:"pep.mode,omitempty"`
-	Enforcement string           `json:"enforcement.outcome,omitempty"`
+	Tool        string            `json:"tool"`
+	Method      string            `json:"method"`
+	Path        string            `json:"path"`
+	Outcome     string            `json:"outcome"`
+	StatusCode  *int              `json:"status_code,omitempty"`
+	LatencyMs   int               `json:"latency_ms"`
+	Meta        map[string]string `json:"meta,omitempty"`
+	StartedAt   string            `json:"started_at"` // RFC3339
+	PEPMode     string            `json:"pep.mode,omitempty"`
+	Enforcement string            `json:"enforcement.outcome,omitempty"`
 }
 
 type blockedResponse struct {
@@ -110,11 +110,14 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 		Client:  &http.Client{Timeout: 3 * time.Second},
 	}
 
-	db, err := stor.Connect(getenv("DATABASE_URL", "postgres://umbra:umbra@postgres:5432/umbra?sslmode=disable"))
+	db, err := stor.Connect(context.Background(), getenv("DATABASE_URL", "postgres://umbra:umbra@postgres:5432/umbra?sslmode=disable"))
 	if err != nil {
 		logger.Error("db connect failed", "err", err)
 	}
-	store := dbstore.New(db)
+	var store *dbstore.Store
+	if db != nil {
+		store = dbstore.New(db)
+	}
 
 	upstreamURL, err := url.Parse(getenv("UPSTREAM_URL", "http://upstream-sample:8090"))
 	if err != nil {
@@ -149,7 +152,7 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 		r2.Header.Set("x-umbra-actor-id", in.Actor.ID)
 		r2.Header.Set("x-umbra-actor-roles", strings.Join(in.Actor.Roles, ","))
 
-		handleToolProxy(tracer, logger, store, pdp, proxy, pepMode)(w, r2)
+		handleToolProxy(tracer, logger, store, pdp, proxy, pepMode).ServeHTTP(w, r2)
 	})
 
 	// Primary V0 enforcement surface: /tool/* forwarded to an upstream, with delegated PDP decision.

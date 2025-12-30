@@ -14,7 +14,7 @@ V0-C goal: a credible, end-to-end demo that shows an enterprise-safe posture:
 4) see decision + invocation receipts in the UI, with integrity chaining.
 
 Non-goals in V0:
-- full OIDC/Keycloak integration (stubbed with an explicit “path to yes” doc),
+- full OIDC/Keycloak integration,
 - distributed event bus / streaming pipeline,
 - multi-region HA and advanced policy languages.
 

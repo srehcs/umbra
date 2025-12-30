@@ -25,7 +25,8 @@ Key folders:
 - UI (Next.js + ShadCN): `identity/control-plane/ui/`
 - Services (Go): `identity/control-plane/services/`
 - Shared packages: `identity/control-plane/packages/`
-- Docs (ADRs, C4, OpenAPI, threat model): `identity/control-plane/docs/`
+- Docs (C4, OpenAPI, threat model): `identity/control-plane/docs/`
+- ADRs (centralized): `docs/adr/`
 
 What this enables (plain language):
 - A **decision brain** (PDP) that returns allow/deny (+ obligations later)
@@ -54,13 +55,14 @@ Then open:
 - UI: http://localhost:3000
 
 Demo guide:
-- `identity/control-plane/docs/04_playbook_demo.md`
+- `identity/control-plane/docs/runbooks/demo.md`
 
 ---
 
 ## Project management
 
 - Next steps backlog (Linear format): `NEXTSTEPS.md`
+- Repo map: `REPO_MAP.md`
 
 ---
 

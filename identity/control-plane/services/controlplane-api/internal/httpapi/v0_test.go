@@ -319,8 +319,8 @@ func TestHandleSimulatePolicy_WithInvalidPolicy(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	body, _ := io.ReadAll(w.Body)
-	json.Unmarshal(body, &resp)
+	respBytes, _ := io.ReadAll(w.Body)
+	json.Unmarshal(respBytes, &resp)
 
 	if code, ok := resp["code"]; !ok || code != policy.ErrorCodePolicyInvalid {
 		t.Errorf("expected code '%s', got %v", policy.ErrorCodePolicyInvalid, code)

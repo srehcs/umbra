@@ -21,7 +21,7 @@ make seed
 ## Code organization
 - `services/`: runnable processes (controlplane-api, pdp, pep-gateway)
 - `packages/`: shared libraries (policy evaluation, receipts, storage)
-- `docs/`: ADRs, OpenAPI, architecture, playbooks
+- `docs/`: OpenAPI, architecture, playbooks (ADRs in `/docs/adr/`)
 
 ## Standards
 - No secrets in logs
