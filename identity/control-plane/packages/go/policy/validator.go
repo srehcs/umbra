@@ -31,10 +31,10 @@ type ValidationError struct {
 
 // PolicyValidationResponse is the response format for validation failures
 type PolicyValidationResponse struct {
-	Code       string             `json:"code"`
-	Message    string             `json:"message"`
-	RequestID  string             `json:"request_id,omitempty"`
-	Errors     []ValidationError  `json:"errors"`
+	Code      string            `json:"code"`
+	Message   string            `json:"message"`
+	RequestID string            `json:"request_id,omitempty"`
+	Errors    []ValidationError `json:"errors"`
 }
 
 // ValidatePolicy validates a policy document and returns any errors

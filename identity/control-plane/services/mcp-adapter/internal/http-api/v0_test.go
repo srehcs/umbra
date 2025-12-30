@@ -52,18 +52,24 @@ func (s *captureStore) InsertInvocationReceipt(_ context.Context, _ uuid.UUID, d
 	return nil
 }
 
-func newTestHandler(t *testing.T, pepMode string, pdpURL string, upstreamURL string, store invocationStore) *mcpHandler {
+func newTestHandler(t *testing.T, pepMode string, pdpTransport http.RoundTripper, toolTransport http.RoundTripper, store invocationStore) *mcpHandler {
 	t.Helper()
 	tracer := trace.NewNoopTracerProvider().Tracer("test")
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	if pdpTransport == nil {
+		pdpTransport = http.DefaultTransport
+	}
+	if toolTransport == nil {
+		toolTransport = http.DefaultTransport
+	}
 	return &mcpHandler{
 		tracer:        tracer,
 		logger:        logger,
 		store:         store,
-		pdp:           &PDPClient{BaseURL: pdpURL, Client: &http.Client{Timeout: 300 * time.Millisecond}},
-		toolClient:    &http.Client{Timeout: 300 * time.Millisecond},
+		pdp:           &PDPClient{BaseURL: "http://pdp.invalid", Client: &http.Client{Timeout: 300 * time.Millisecond, Transport: pdpTransport}},
+		toolClient:    &http.Client{Timeout: 300 * time.Millisecond, Transport: toolTransport},
 		pepMode:       pepMode,
-		upstreamURL:   upstreamURL,
+		upstreamURL:   "http://upstream.invalid",
 		defaultTenant: uuid.MustParse("00000000-0000-0000-0000-000000000001"),
 		defaultActor: actorIdentity{
 			ID:     "user-1",
@@ -71,40 +77,29 @@ func newTestHandler(t *testing.T, pepMode string, pdpURL string, upstreamURL str
 			Roles:  []string{"developer"},
 			Source: "dev",
 		},
-		serverName:    "mcp.test",
+		serverName: "mcp.test",
 	}
 }
 
 func TestMCPAllowForwardedReceipt(t *testing.T) {
 	var pdpRequestID string
 
-	pdpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req protocol.DecisionRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("pdp request decode failed: %v", err)
-		}
-		pdpRequestID = req.Trace.RequestID
-		resp := protocol.DecisionResponse{
-			Decision:   "allow",
-			DecisionID: uuid.NewString(),
-			Reason:     "ok",
-			RequestID:  req.Trace.RequestID,
-			TraceID:    req.Trace.TraceID,
-			SpanID:     req.Trace.SpanID,
-		}
-		w.Header().Set("content-type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
-	defer pdpServer.Close()
-
-	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("content-type", "application/json")
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`))
-	}))
-	defer upstreamServer.Close()
-
 	store := &captureStore{}
-	h := newTestHandler(t, "enforce", pdpServer.URL, upstreamServer.URL, store)
+	h := newTestHandler(t, "enforce",
+		pdpRoundTripper{onRequest: func(req protocol.DecisionRequest) (protocol.DecisionResponse, int, error) {
+			pdpRequestID = req.Trace.RequestID
+			return protocol.DecisionResponse{
+				Decision:   "allow",
+				DecisionID: uuid.NewString(),
+				Reason:     "ok",
+				RequestID:  req.Trace.RequestID,
+				TraceID:    req.Trace.TraceID,
+				SpanID:     req.Trace.SpanID,
+			}, http.StatusOK, nil
+		}},
+		staticRoundTripper{status: http.StatusOK, body: `{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`},
+		store,
+	)
 
 	reqBody := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo.tool","arguments":{"a":1,"b":2}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(reqBody))
@@ -145,25 +140,21 @@ func TestMCPAllowForwardedReceipt(t *testing.T) {
 func TestMCPDenyEnforceBlocked(t *testing.T) {
 	var upstreamCalls int32
 
-	pdpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := protocol.DecisionResponse{
-			Decision:   "deny",
-			DecisionID: uuid.NewString(),
-			Reason:     "nope",
-		}
-		w.Header().Set("content-type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
-	defer pdpServer.Close()
-
-	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&upstreamCalls, 1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer upstreamServer.Close()
-
 	store := &captureStore{}
-	h := newTestHandler(t, "enforce", pdpServer.URL, upstreamServer.URL, store)
+	h := newTestHandler(t, "enforce",
+		pdpRoundTripper{onRequest: func(req protocol.DecisionRequest) (protocol.DecisionResponse, int, error) {
+			return protocol.DecisionResponse{
+				Decision:   "deny",
+				DecisionID: uuid.NewString(),
+				Reason:     "nope",
+			}, http.StatusOK, nil
+		}},
+		roundTripperFunc(func(_ *http.Request) (*http.Response, error) {
+			atomic.AddInt32(&upstreamCalls, 1)
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(""))}, nil
+		}),
+		store,
+	)
 
 	reqBody := []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"demo.tool"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(reqBody))
@@ -190,12 +181,6 @@ func TestMCPDenyEnforceBlocked(t *testing.T) {
 }
 
 func TestMCPPDPUnavailableByMode(t *testing.T) {
-	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("content-type", "application/json")
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":3,"result":{"ok":true}}`))
-	}))
-	defer upstreamServer.Close()
-
 	tests := []struct {
 		name          string
 		pepMode       string
@@ -209,7 +194,11 @@ func TestMCPPDPUnavailableByMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &captureStore{}
-			h := newTestHandler(t, tt.pepMode, "http://127.0.0.1:1", upstreamServer.URL, store)
+			h := newTestHandler(t, tt.pepMode,
+				errorRoundTripper{err: context.DeadlineExceeded},
+				staticRoundTripper{status: http.StatusOK, body: `{"jsonrpc":"2.0","id":3,"result":{"ok":true}}`},
+				store,
+			)
 
 			reqBody := []byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"demo.tool"}}`)
 			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(reqBody))
@@ -238,25 +227,18 @@ func TestMCPPDPUnavailableByMode(t *testing.T) {
 }
 
 func TestMCPActorIdentityFromParams(t *testing.T) {
-	pdpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := protocol.DecisionResponse{
-			Decision:   "allow",
-			DecisionID: uuid.NewString(),
-			Reason:     "ok",
-		}
-		w.Header().Set("content-type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
-	defer pdpServer.Close()
-
-	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("content-type", "application/json")
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":4,"result":{"ok":true}}`))
-	}))
-	defer upstreamServer.Close()
-
 	store := &captureStore{}
-	h := newTestHandler(t, "enforce", pdpServer.URL, upstreamServer.URL, store)
+	h := newTestHandler(t, "enforce",
+		pdpRoundTripper{onRequest: func(req protocol.DecisionRequest) (protocol.DecisionResponse, int, error) {
+			return protocol.DecisionResponse{
+				Decision:   "allow",
+				DecisionID: uuid.NewString(),
+				Reason:     "ok",
+			}, http.StatusOK, nil
+		}},
+		staticRoundTripper{status: http.StatusOK, body: `{"jsonrpc":"2.0","id":4,"result":{"ok":true}}`},
+		store,
+	)
 
 	reqBody := []byte(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"demo.tool","actor":{"id":"human-1","type":"human","roles":["admin"],"source":"client"}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(reqBody))
@@ -286,25 +268,18 @@ func TestMCPActorIdentityFromParams(t *testing.T) {
 }
 
 func TestMCPArgsRedactionInReceipt(t *testing.T) {
-	pdpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := protocol.DecisionResponse{
-			Decision:   "allow",
-			DecisionID: uuid.NewString(),
-			Reason:     "ok",
-		}
-		w.Header().Set("content-type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
-	defer pdpServer.Close()
-
-	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("content-type", "application/json")
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":5,"result":{"ok":true}}`))
-	}))
-	defer upstreamServer.Close()
-
 	store := &captureStore{}
-	h := newTestHandler(t, "enforce", pdpServer.URL, upstreamServer.URL, store)
+	h := newTestHandler(t, "enforce",
+		pdpRoundTripper{onRequest: func(req protocol.DecisionRequest) (protocol.DecisionResponse, int, error) {
+			return protocol.DecisionResponse{
+				Decision:   "allow",
+				DecisionID: uuid.NewString(),
+				Reason:     "ok",
+			}, http.StatusOK, nil
+		}},
+		staticRoundTripper{status: http.StatusOK, body: `{"jsonrpc":"2.0","id":5,"result":{"ok":true}}`},
+		store,
+	)
 
 	reqBody := []byte(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"demo.tool","arguments":{"password":"secret","nested":{"token":"abc"}}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(reqBody))
@@ -318,19 +293,18 @@ func TestMCPArgsRedactionInReceipt(t *testing.T) {
 }
 
 func TestMCPContextTooLarge(t *testing.T) {
-	pdpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := protocol.DecisionResponse{
-			Decision:   "allow",
-			DecisionID: uuid.NewString(),
-			Reason:     "ok",
-		}
-		w.Header().Set("content-type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
-	defer pdpServer.Close()
-
 	store := &captureStore{}
-	h := newTestHandler(t, "enforce", pdpServer.URL, "http://127.0.0.1:1", store)
+	h := newTestHandler(t, "enforce",
+		pdpRoundTripper{onRequest: func(req protocol.DecisionRequest) (protocol.DecisionResponse, int, error) {
+			return protocol.DecisionResponse{
+				Decision:   "allow",
+				DecisionID: uuid.NewString(),
+				Reason:     "ok",
+			}, http.StatusOK, nil
+		}},
+		staticRoundTripper{status: http.StatusOK, body: `{"jsonrpc":"2.0","id":6,"result":{"ok":true}}`},
+		store,
+	)
 
 	oversized := strings.Repeat("x", maxServerLen+1)
 	reqBody := []byte(`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"demo.tool","server":"` + oversized + `"}}`)
@@ -346,4 +320,54 @@ func TestMCPContextTooLarge(t *testing.T) {
 		body, _ := io.ReadAll(res.Body)
 		t.Fatalf("expected 400, got %d: %s", res.StatusCode, string(body))
 	}
+}
+
+type pdpRoundTripper struct {
+	onRequest func(req protocol.DecisionRequest) (protocol.DecisionResponse, int, error)
+}
+
+func (p pdpRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	var payload protocol.DecisionRequest
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	resp, status, err := p.onRequest(payload)
+	if err != nil {
+		return nil, err
+	}
+	body, _ := json.Marshal(resp)
+	return &http.Response{
+		StatusCode: status,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(string(body))),
+		Request:    req,
+	}, nil
+}
+
+type staticRoundTripper struct {
+	status int
+	body   string
+}
+
+func (s staticRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: s.status,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(s.body)),
+		Request:    req,
+	}, nil
+}
+
+type errorRoundTripper struct {
+	err error
+}
+
+func (e errorRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error) {
+	return nil, e.err
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (r roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return r(req)
 }

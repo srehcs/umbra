@@ -12,15 +12,15 @@ type Policy struct {
 }
 
 type Rule struct {
-	Effect         string   `json:"effect"` // "allow" | "deny"
-	RolesAny       []string `json:"roles_any,omitempty"`
-	MethodsAny     []string `json:"methods_any,omitempty"`
-	PathPrefix     string   `json:"path_prefix,omitempty"`
-	ActorTypesAny  []string `json:"actor_types_any,omitempty"`
-	ActorIDsAny    []string `json:"actor_ids_any,omitempty"`
-	MCPServersAny  []string `json:"mcp_servers_any,omitempty"`
-	MCPToolsAny    []string `json:"mcp_tools_any,omitempty"`
-	MCPMethodsAny  []string `json:"mcp_methods_any,omitempty"`
+	Effect        string   `json:"effect"` // "allow" | "deny"
+	RolesAny      []string `json:"roles_any,omitempty"`
+	MethodsAny    []string `json:"methods_any,omitempty"`
+	PathPrefix    string   `json:"path_prefix,omitempty"`
+	ActorTypesAny []string `json:"actor_types_any,omitempty"`
+	ActorIDsAny   []string `json:"actor_ids_any,omitempty"`
+	MCPServersAny []string `json:"mcp_servers_any,omitempty"`
+	MCPToolsAny   []string `json:"mcp_tools_any,omitempty"`
+	MCPMethodsAny []string `json:"mcp_methods_any,omitempty"`
 }
 
 type Decision struct {

@@ -9,9 +9,9 @@ type TenantContext struct {
 }
 
 type Actor struct {
-	Type   string   `json:"type"`   // "human" | "agent" (V0)
-	ID     string   `json:"id"`     // stable identifier
-	Roles  []string `json:"roles"`  // role names (V0)
+	Type   string   `json:"type"`  // "human" | "agent" (V0)
+	ID     string   `json:"id"`    // stable identifier
+	Roles  []string `json:"roles"` // role names (V0)
 	Source string   `json:"source,omitempty"`
 }
 
