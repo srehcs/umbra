@@ -21,6 +21,10 @@ Use Redis Streams as an optional V0 event mechanism:
 
 V0 writes to DB first; Streams is optional “fan-out”.
 
+Acceptance criteria to move from Proposed:
+- Redis is provisioned in dev/prod environments.
+- Event consumers are implemented for at least one event type.
+
 ## Alternatives
 - Postgres outbox pattern (durable, fewer moving parts)
 - Kafka/NATS (too heavy for V0)

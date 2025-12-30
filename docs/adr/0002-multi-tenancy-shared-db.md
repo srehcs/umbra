@@ -20,3 +20,4 @@ We want true multi-tenancy from day 1 (shared DB), but remain deployable in cust
 ## Consequences
 - Requires strict query hygiene and tests to prevent cross-tenant data leakage.
 - Enables future RLS adoption with minimal schema changes.
+  - See `docs/security/rls_plan.md` for the staged rollout plan.
