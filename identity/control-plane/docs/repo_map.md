@@ -34,7 +34,7 @@
 ### Docs
 - `docs/`
   - `api/openapi.yaml` — API contract
-  - `adr/` — architectural decisions
+  - `/docs/adr/` — architectural decisions (centralized)
   - `architecture/` — C4 diagrams (context/containers/components)
   - `security/` — threat model and OIDC “path to yes”
   - `examples/` — curl scripts for demo flows

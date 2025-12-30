@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/umbra-labs/agent-identity-control-plane/packages/go/receipts"
 	stor "github.com/umbra-labs/agent-identity-control-plane/packages/go/storage"
 )
 
@@ -137,6 +138,21 @@ type Receipt struct {
 	Data json.RawMessage `json:"data"`
 }
 
+func (s *Store) ListReceiptChain(ctx context.Context, tenant uuid.UUID, limit int, kind string) ([]receipts.ChainRecord, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	switch kind {
+	case "decision":
+		return s.listReceiptChain(ctx, tenant, limit, "receipts_decision")
+	case "invocation":
+		return s.listReceiptChain(ctx, tenant, limit, "receipts_invocation")
+	default:
+		return nil, stor.ErrNotFound
+	}
+}
+
 func (s *Store) ListReceipts(ctx context.Context, tenant uuid.UUID, limit int, kind string, q string, before *time.Time) ([]json.RawMessage, *time.Time, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 50
@@ -194,7 +210,7 @@ func (s *Store) ListReceipts(ctx context.Context, tenant uuid.UUID, limit int, k
     ORDER BY ts DESC
     LIMIT $2`
 
-	out := []json.RawMessage{}
+	out := []map[string]interface{}{}
 	// Decisions
 	if kind == "" || kind == "decision" || kind == "all" {
 		drows, err := s.db.Query(ctx, dsql, argsD...)
@@ -274,7 +290,58 @@ func (s *Store) ListReceipts(ctx context.Context, tenant uuid.UUID, limit int, k
 		t, _ := out[len(out)-1]["ts"].(time.Time)
 		next = &t
 	}
-	return out, next, nil
+
+	items := make([]json.RawMessage, 0, len(out))
+	for _, r := range out {
+		b, err := json.Marshal(r)
+		if err != nil {
+			return nil, nil, err
+		}
+		items = append(items, b)
+	}
+	return items, next, nil
+}
+
+func (s *Store) listReceiptChain(ctx context.Context, tenant uuid.UUID, limit int, table string) ([]receipts.ChainRecord, error) {
+	rows, err := s.db.Query(ctx, `
+    SELECT id, body_json, prev_hash, hash, ts
+    FROM `+table+`
+    WHERE tenant_id=$1
+    ORDER BY ts DESC
+    LIMIT $2`, tenant, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []receipts.ChainRecord{}
+	for rows.Next() {
+		var id uuid.UUID
+		var body []byte
+		var prev *string
+		var hash string
+		var ts time.Time
+		if err := rows.Scan(&id, &body, &prev, &hash, &ts); err != nil {
+			return nil, err
+		}
+		prevVal := ""
+		if prev != nil {
+			prevVal = *prev
+		}
+		out = append(out, receipts.ChainRecord{
+			ID:       id.String(),
+			Body:     body,
+			PrevHash: prevVal,
+			Hash:     hash,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
 }
 
 func itoa(i int) string {

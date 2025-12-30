@@ -1,28 +1,28 @@
 package httpapi
 
 import (
-	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"testing"
 
 	"github.com/google/uuid"
-	"log/slog"
-	"net/http/httputil"
-	"net/url"
-	"os"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // TestObserveVsEnforceMode tests that PEP_MODE correctly controls behavior for DENY decisions
 func TestObserveVsEnforceMode(t *testing.T) {
 	tests := []struct {
-		name           string
-		pepMode        string
-		decision       string // "allow" or "deny"
-		expectedStatus int
-		expectedBody   string
+		name            string
+		pepMode         string
+		decision        string // "allow" or "deny"
+		expectedStatus  int
+		expectedBody    string
 		expectedOutcome string
 	}{
 		{
@@ -86,7 +86,7 @@ func TestObserveVsEnforceMode(t *testing.T) {
 			logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
 			// Manually register V0
-			tracer := noopTracer{}
+			tracer := trace.NewNoopTracerProvider().Tracer("test")
 			pdp := &PDPClient{
 				BaseURL: pdpServer.URL,
 				Client:  &http.Client{},
@@ -134,16 +134,3 @@ func TestObserveVsEnforceMode(t *testing.T) {
 		})
 	}
 }
-
-// noopTracer is a minimal tracer implementation for testing
-type noopTracer struct{}
-
-func (t noopTracer) Start(ctx context.Context, spanName string, opts ...interface{}) (context.Context, interface{}) {
-	return ctx, noopSpan{}
-}
-
-type noopSpan struct{}
-
-func (s noopSpan) End(...interface{}) {}
-
-func (s noopSpan) SetAttributes(...interface{}) {}

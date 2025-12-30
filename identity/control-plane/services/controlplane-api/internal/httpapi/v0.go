@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/policy"
+	"github.com/umbra-labs/agent-identity-control-plane/packages/go/receipts"
 
 	"github.com/google/uuid"
 
@@ -23,8 +25,8 @@ type Server struct {
 }
 
 type ListReceiptsResponse struct {
-  Items []json.RawMessage `json:"items"`
-  NextBefore string `json:"next_before,omitempty"`
+	Items      []json.RawMessage `json:"items"`
+	NextBefore string            `json:"next_before,omitempty"`
 }
 
 func registerV0(mux *http.ServeMux, logger *slog.Logger) {
@@ -52,6 +54,7 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 	mux.HandleFunc("/v1/policies/activate", s.handleActivatePolicy)
 	mux.HandleFunc("/v1/policies/simulate", s.handleSimulatePolicy)
 	mux.HandleFunc("/v1/receipts", s.handleReceipts)
+	mux.HandleFunc("/v1/receipts/verify", s.handleReceiptsVerify)
 }
 
 func (s *Server) tenantFromRequest(r *http.Request) (uuid.UUID, error) {
@@ -112,13 +115,13 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
-	if s.Store == nil {
-		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
-		return
-	}
 	tenant, err := s.tenantFromRequest(r)
 	if err != nil || tenant == uuid.Nil {
 		http.Error(w, "missing/invalid x-umbra-tenant-id", http.StatusBadRequest)
+		return
+	}
+	if s.Store == nil {
+		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -228,10 +231,6 @@ func (s *Server) handleSimulatePolicy(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if s.Store == nil {
-		http.Error(w, "storage not configured", 503)
-		return
-	}
 	tenant, err := s.tenantFromRequest(r)
 	if err != nil || tenant == uuid.Nil {
 		http.Error(w, "missing/invalid x-umbra-tenant-id", 400)
@@ -277,6 +276,10 @@ func (s *Server) handleSimulatePolicy(w http.ResponseWriter, r *http.Request) {
 		policyHash = hash
 		policyVersion = 0 // Simulated policies don't have a version
 	} else {
+		if s.Store == nil {
+			http.Error(w, "storage not configured", 503)
+			return
+		}
 		// Fetch active policy
 		policies, err := s.Store.ListPolicies(ctx, tenant, 50)
 		if err != nil {
@@ -363,6 +366,98 @@ func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request) {
 		resp["next_before"] = next.UTC().Format(time.RFC3339)
 	}
 	writeJSON(w, resp)
+}
+
+func (s *Server) handleReceiptsVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Store == nil {
+		http.Error(w, "storage not configured", 503)
+		return
+	}
+	tenant, err := s.tenantFromRequest(r)
+	if err != nil || tenant == uuid.Nil {
+		http.Error(w, "missing/invalid x-umbra-tenant-id", 400)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	kind := r.URL.Query().Get("kind")
+	if kind == "" {
+		kind = "all"
+	}
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+
+	verifyKind := func(k string) (receipts.VerifyResult, error) {
+		records, err := s.Store.ListReceiptChain(ctx, tenant, limit, k)
+		if err != nil {
+			return receipts.VerifyResult{}, err
+		}
+		return receipts.VerifyChain(records), nil
+	}
+
+	switch kind {
+	case "decision", "invocation":
+		res, err := verifyKind(kind)
+		if err != nil {
+			if errors.Is(err, stor.ErrNotFound) {
+				http.Error(w, "invalid kind", 400)
+				return
+			}
+			http.Error(w, "db error", 500)
+			return
+		}
+		writeJSON(w, map[string]interface{}{
+			"ok":      res.OK,
+			"checked": res.Checked,
+			"kind":    kind,
+			"failure": res.Failure,
+		})
+	case "all":
+		res, err := verifyKind("decision")
+		if err != nil {
+			http.Error(w, "db error", 500)
+			return
+		}
+		if !res.OK {
+			writeJSON(w, map[string]interface{}{
+				"ok":      false,
+				"checked": res.Checked,
+				"kind":    "decision",
+				"failure": res.Failure,
+			})
+			return
+		}
+		resInv, err := verifyKind("invocation")
+		if err != nil {
+			http.Error(w, "db error", 500)
+			return
+		}
+		if !resInv.OK {
+			writeJSON(w, map[string]interface{}{
+				"ok":      false,
+				"checked": resInv.Checked,
+				"kind":    "invocation",
+				"failure": resInv.Failure,
+			})
+			return
+		}
+		writeJSON(w, map[string]interface{}{
+			"ok":      true,
+			"checked": res.Checked + resInv.Checked,
+			"kind":    "all",
+		})
+	default:
+		http.Error(w, "invalid kind", 400)
+	}
 }
 
 func decodeJSON(r *http.Request, v interface{}) error {

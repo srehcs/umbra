@@ -1,26 +1,6 @@
-# ADR XXXX: <Title>
+# ADR Template (Centralized)
 
-Date: YYYY-MM-DD
-Status: Proposed | Accepted | Superseded
+ADRs are centralized at `/docs/adr/`.
 
-## Context
-What problem are we solving? What constraints matter (security, deploy model, compatibility)?
-
-## Decision
-What we decided, stated clearly and unambiguously.
-
-## Alternatives considered
-- Option A
-  - Pros:
-  - Cons:
-- Option B
-  - Pros:
-  - Cons:
-
-## Consequences
-- Positive:
-- Negative:
-- Follow-ups / tasks:
-
-## Notes / References
-Links to docs, issues, and relevant design notes.
+- Primary template: `/docs/adr/0000-template.md`
+- Alternate template: `/docs/adr/adr_template.md`

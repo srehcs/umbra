@@ -78,9 +78,8 @@ This backlog is designed to produce a **demo-worthy vertical slice** while enfor
 
 ### E1-S3 ADR minimum set (no rework)
 **Files**
-- `docs/adr/0005-policy-evaluator-interface.md` (new)
-- `docs/adr/0006-redis-streams-events.md` (new)
-- `docs/adr/0007-service-to-service-auth-plan.md` (new, stub ok)
+- `/docs/adr/0005-policy-evaluator-interface.md` (new)
+- `/docs/adr/0006-redis-streams-events.md` (new)
 
 **Acceptance Criteria**
 - Alternatives + consequences included
