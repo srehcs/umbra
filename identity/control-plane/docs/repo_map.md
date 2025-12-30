@@ -16,6 +16,11 @@
 - `services/pep-gateway/`
   - enforcement entrypoint for demo (MCP/CLI expansion path)
   - calls PDP then records invocation receipt
+- `services/mcp-adapter/`
+  - MCP tool-call enforcement adapter (PEP)
+  - calls PDP then forwards to MCP upstream
+- `services/mcp-upstream/`
+  - demo MCP server for local stack
 
 ### Packages
 - `packages/go/policy/`
