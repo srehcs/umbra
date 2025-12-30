@@ -5,6 +5,11 @@ export const RuleSchema = z.object({
   roles_any: z.array(z.string()).optional().default([]),
   methods_any: z.array(z.string()).optional().default([]),
   path_prefix: z.string().optional().default(""),
+  actor_types_any: z.array(z.string()).optional().default([]),
+  actor_ids_any: z.array(z.string()).optional().default([]),
+  mcp_servers_any: z.array(z.string()).optional().default([]),
+  mcp_tools_any: z.array(z.string()).optional().default([]),
+  mcp_methods_any: z.array(z.string()).optional().default([]),
 });
 
 export const PolicySchema = z.object({

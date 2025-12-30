@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import type { PolicyRow } from "@/lib/types";
 import { api } from "@/lib/api";
 import { simulateABACV0, PolicySchema } from "@/lib/policy";
 import { Button } from "@/components/ui/button";
@@ -12,10 +11,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Plus, CheckCircle2, FlaskConical, BadgeCheck } from "lucide-react";
+import { Plus, CheckCircle2, FlaskConical, BadgeCheck, Pencil } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
-import type { Policy } from "@/lib/types";
+import type { PolicyRow } from "@/lib/types";
 
 const starterPolicy = {
   version: 1,
@@ -27,7 +26,7 @@ const starterPolicy = {
 };
 
 export default function PoliciesPage() {
-  const [items, setItems] = React.useState<Policy[]>([]);
+  const [items, setItems] = React.useState<PolicyRow[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -35,6 +34,10 @@ export default function PoliciesPage() {
   const [policy, setPolicy] = React.useState(JSON.stringify(starterPolicy, null, 2));
 
   const [validation, setValidation] = React.useState<string | null>(null);
+  const [editOpen, setEditOpen] = React.useState(false);
+  const [editing, setEditing] = React.useState<PolicyRow | null>(null);
+  const [editPolicy, setEditPolicy] = React.useState("");
+  const [editValidation, setEditValidation] = React.useState<string | null>(null);
 
   // simulate modal state
   const [roles, setRoles] = React.useState("developer");
@@ -90,6 +93,9 @@ export default function PoliciesPage() {
 
   async function activate(id: string) {
     setError(null);
+    if (!window.confirm("Activate this policy? This will deactivate any currently active policy.")) {
+      return;
+    }
     try {
       await api.activatePolicy(id);
       await refresh();
@@ -113,6 +119,42 @@ export default function PoliciesPage() {
       path,
     });
     setSimResult({ decision: r.decision, reason: r.reason });
+  }
+
+  function openEdit(policyRow: PolicyRow) {
+    setEditing(policyRow);
+    setEditPolicy(JSON.stringify(policyRow.policy ?? {}, null, 2));
+    setEditValidation(null);
+    setEditOpen(true);
+  }
+
+  function validateEdit(): boolean {
+    setEditValidation(null);
+    let parsed: unknown;
+    try { parsed = JSON.parse(editPolicy); } catch { setEditValidation("Policy must be valid JSON."); return false; }
+    const res = PolicySchema.safeParse(parsed);
+    if (!res.success) {
+      setEditValidation("Schema validation failed: " + res.error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("; "));
+      return false;
+    }
+    setEditValidation("OK: policy JSON is valid for ABAC V0.");
+    return true;
+  }
+
+  async function updatePolicy() {
+    if (!editing) return;
+    setError(null);
+    const ok = validateEdit();
+    if (!ok) return;
+    const parsed: unknown = JSON.parse(editPolicy);
+    try {
+      await api.updatePolicy(editing.id, { policy: parsed as Record<string, unknown> });
+      setEditOpen(false);
+      setEditing(null);
+      await refresh();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Update failed");
+    }
   }
 
   return (
@@ -146,7 +188,8 @@ export default function PoliciesPage() {
                   <AlertTitle>Schema hints</AlertTitle>
                   <AlertDescription>
                     Required fields: <span className="code">version</span>, <span className="code">mode</span>, <span className="code">rules</span>, <span className="code">default</span>.<br />
-                    Rule fields: <span className="code">effect</span> (allow|deny), optional <span className="code">roles_any</span>, <span className="code">methods_any</span>, <span className="code">path_prefix</span>.
+                    Rule fields: <span className="code">effect</span> (allow|deny), optional <span className="code">roles_any</span>, <span className="code">methods_any</span>, <span className="code">path_prefix</span>,
+                    <span className="code">actor_types_any</span>, <span className="code">actor_ids_any</span>, <span className="code">mcp_servers_any</span>, <span className="code">mcp_tools_any</span>, <span className="code">mcp_methods_any</span>.
                   </AlertDescription>
                 </Alert>
 
@@ -236,6 +279,7 @@ export default function PoliciesPage() {
                 <TableHead>Name</TableHead>
                 <TableHead>Version</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Updated</TableHead>
                 <TableHead>Policy hash</TableHead>
                 <TableHead />
               </TableRow>
@@ -248,8 +292,13 @@ export default function PoliciesPage() {
                   <TableCell>
                     {p.active ? <Badge variant="success">active</Badge> : <Badge variant="outline">inactive</Badge>}
                   </TableCell>
-                  <TableCell className="code text-xs text-muted-foreground">{p.policy_hash}</TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="text-xs text-muted-foreground">{new Date(p.updated_at).toLocaleString()}</TableCell>
+                  <TableCell className="code text-xs text-muted-foreground">{p.policy_hash?.slice(0, 12)}</TableCell>
+                  <TableCell className="text-right space-x-2">
+                    <Button size="sm" variant="outline" onClick={() => openEdit(p)}>
+                      <Pencil className="h-4 w-4 mr-2" />
+                      Edit
+                    </Button>
                     <Button
                       size="sm"
                       variant={p.active ? "secondary" : "default"}
@@ -264,13 +313,36 @@ export default function PoliciesPage() {
               ))}
               {items.length === 0 && !loading && (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-sm text-muted-foreground">No policies yet.</TableCell>
+                  <TableCell colSpan={6} className="text-sm text-muted-foreground">No policies yet.</TableCell>
                 </TableRow>
               )}
             </TableBody>
           </Table>
         </CardContent>
       </Card>
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Edit policy</DialogTitle>
+            <DialogDescription>
+              {editing ? `${editing.name} • v${editing.version}` : "Edit policy JSON"}
+              {editing?.active && " • active"}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <Label>Policy JSON</Label>
+            <Textarea className="min-h-[360px]" value={editPolicy} onChange={(e) => setEditPolicy(e.target.value)} />
+            {editValidation && <div className="text-xs text-muted-foreground">{editValidation}</div>}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={validateEdit}><BadgeCheck className="h-4 w-4 mr-2" /> Validate</Button>
+            <Button onClick={updatePolicy} disabled={editing?.active}>Update</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
