@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  go-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: go test
+        working-directory: identity/control-plane
+        run: go test ./...
+
+  ui-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with:
+          version: "9.0.0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+          cache-dependency-path: identity/control-plane/ui/pnpm-lock.yaml
+      - name: pnpm install
+        working-directory: identity/control-plane/ui
+        run: pnpm install --frozen-lockfile
+      - name: pnpm lint
+        working-directory: identity/control-plane/ui
+        run: pnpm lint

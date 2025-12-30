@@ -45,20 +45,29 @@ export default function PoliciesPage() {
   const [path, setPath] = React.useState("/demo");
   const [simResult, setSimResult] = React.useState<{ decision: string; reason: string } | null>(null);
 
-  async function refresh() {
+  async function refresh(signal?: AbortSignal) {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.listPolicies();
+      const data = await api.listPolicies(signal);
       setItems(data.items ?? []);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : \"Failed to load policies\");
+      if (signal?.aborted) return;
+      setError(e instanceof Error ? e.message : "Failed to load policies");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }
 
-  React.useEffect(() => { refresh(); }, []);
+  function handleRefresh() {
+    void refresh();
+  }
+
+  React.useEffect(() => {
+    const controller = new AbortController();
+    refresh(controller.signal);
+    return () => controller.abort();
+  }, []);
 
   function validateOnly(): boolean {
     setValidation(null);
@@ -87,7 +96,7 @@ export default function PoliciesPage() {
       await api.createPolicy({ name, policy: parsed as Record<string, unknown> });
       await refresh();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : \"Create failed\");
+      setError(e instanceof Error ? e.message : "Create failed");
     }
   }
 
@@ -100,7 +109,7 @@ export default function PoliciesPage() {
       await api.activatePolicy(id);
       await refresh();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : \"Activate failed\");
+      setError(e instanceof Error ? e.message : "Activate failed");
     }
   }
 
@@ -252,7 +261,7 @@ export default function PoliciesPage() {
             </div>
 
             <DialogFooter>
-              <Button variant="secondary" onClick={refresh} disabled={loading}>Refresh</Button>
+              <Button variant="secondary" onClick={handleRefresh} disabled={loading}>Refresh</Button>
               <Button onClick={create}>Create</Button>
             </DialogFooter>
           </DialogContent>

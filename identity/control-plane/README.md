@@ -42,6 +42,7 @@ Open:
 
 Demo script:
 - `docs/runbooks/demo.md`
+- PDP unavailable runbook: `docs/runbooks/pdp_unavailable.md`
 - Examples: `docs/examples/`
 
 ---
@@ -51,9 +52,26 @@ Demo script:
 Start here:
 - `docs/00_exec_summary.md`
 - `docs/runbooks/demo.md`
+- `docs/runbooks/pdp_unavailable.md`
 
 Engineering rules (umbrella-level):
 - `../../RULES.md`
+
+---
+
+## API notes
+
+Receipts export endpoint:
+- `GET /v1/receipts/export` (format=json|csv)
+
+See `docs/api/openapi.yaml` for the full contract.
+
+---
+
+## CI expectations
+
+- Go: `go test ./...` (run from `identity/control-plane`)
+- UI: `pnpm lint` (run from `identity/control-plane/ui`)
 
 ---
 

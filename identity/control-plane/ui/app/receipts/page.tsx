@@ -22,7 +22,7 @@ function badgeForOutcome(r: Receipt) {
     if (r.outcome === "denied") return <Badge variant="warning">denied</Badge>;
     return <Badge variant="danger">error</Badge>;
   }
-  return <Badge variant="outline">{r.kind}</Badge>;
+  return <Badge variant="outline">unknown</Badge>;
 }
 
 export default function ReceiptsPage() {
@@ -35,35 +35,56 @@ export default function ReceiptsPage() {
 
   const [nextBefore, setNextBefore] = React.useState<string | undefined>(undefined);
   const [selected, setSelected] = React.useState<Receipt | null>(null);
+  const [selectedJSON, setSelectedJSON] = React.useState<string>("");
 
-  async function load(reset: boolean) {
+  async function load(reset: boolean, signal?: AbortSignal) {
     setLoading(true);
     setError(null);
     try {
+      const qValue = q.trim();
+      const beforeValue = reset ? undefined : nextBefore;
       const data = await api.listReceipts({
         limit: 50,
         kind,
-        q: q.trim() ? q.trim() : undefined,
-        before: reset ? undefined : nextBefore,
-      });
+        ...(qValue ? { q: qValue } : {}),
+        ...(beforeValue ? { before: beforeValue } : {}),
+      }, signal);
 
       const newItems = data.items ?? [];
       setItems(reset ? newItems : [...items, ...newItems]);
       setNextBefore(data.next_before);
     } catch (e: unknown) {
+      if (signal?.aborted) return;
       const msg = e instanceof Error ? e.message : "Failed to load receipts";
       setError(msg);
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }
 
-  React.useEffect(() => { load(true); /* eslint-disable-next-line */ }, []);
   React.useEffect(() => {
-    const t = setTimeout(() => load(true), 250);
-    return () => clearTimeout(t);
+    const controller = new AbortController();
+    load(true, controller.signal);
+    return () => controller.abort();
+    // eslint-disable-next-line
+  }, []);
+  React.useEffect(() => {
+    const controller = new AbortController();
+    const t = setTimeout(() => load(true, controller.signal), 250);
+    return () => {
+      controller.abort();
+      clearTimeout(t);
+    };
     // eslint-disable-next-line
   }, [q, kind]);
+
+  React.useEffect(() => {
+    if (!selected) {
+      setSelectedJSON("");
+      return;
+    }
+    setSelectedJSON(JSON.stringify(selected, null, 2));
+  }, [selected]);
 
   return (
     <div className="space-y-6">
@@ -75,6 +96,36 @@ export default function ReceiptsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button variant="outline">Export</Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>Export receipts</DialogTitle>
+                <DialogDescription>
+                  Use the export endpoint to download JSON or CSV with basic filters.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="text-sm text-muted-foreground">
+                <div className="mb-2">Example (JSON, last 1 hour):</div>
+                <pre className="code text-xs bg-muted p-3 rounded-md overflow-auto">
+{`curl -sS -H "x-umbra-tenant-id: <tenant_id>" \\
+  "http://localhost:8080/v1/receipts/export?format=json&from=$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)"`}
+                </pre>
+                <div className="mt-3 mb-2">Example (CSV, denies only):</div>
+                <pre className="code text-xs bg-muted p-3 rounded-md overflow-auto">
+{`curl -sS -H "x-umbra-tenant-id: <tenant_id>" \\
+  "http://localhost:8080/v1/receipts/export?format=csv&decision=deny&limit=200"`}
+                </pre>
+              </div>
+              <DialogFooter>
+                <Button variant="secondary" onClick={() => navigator.clipboard.writeText("http://localhost:8080/v1/receipts/export")}>
+                  Copy endpoint
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
           <Button variant="secondary" onClick={() => load(true)} disabled={loading}>Refresh</Button>
         </div>
       </div>
@@ -158,14 +209,14 @@ export default function ReceiptsPage() {
                         <div className="mt-4">
                           <div className="mb-2 text-xs text-muted-foreground">Raw JSON</div>
                           <pre className="code text-xs bg-muted p-4 rounded-md overflow-auto max-h-[45vh]">
-{JSON.stringify(selected ?? r, null, 2)}
+{selectedJSON || JSON.stringify(r, null, 2)}
                           </pre>
                         </div>
 
                         <DialogFooter>
                           <Button
                             variant="secondary"
-                            onClick={() => navigator.clipboard.writeText(JSON.stringify(selected ?? r, null, 2))}
+                            onClick={() => navigator.clipboard.writeText(selectedJSON || JSON.stringify(r, null, 2))}
                           >
                             Copy JSON
                           </Button>
