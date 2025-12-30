@@ -10,7 +10,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	otelx "github.com/umbra-labs/agent-identity-control-plane/packages/go/otel"
-	"github.com/umbra-labs/agent-identity-control-plane/services/controlplane-api/internal/httpapi"
+	"github.com/umbra-labs/agent-identity-control-plane/services/controlplane-api/internal/http-api"
 )
 
 func main() {

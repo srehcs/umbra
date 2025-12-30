@@ -30,6 +30,11 @@ type PDPClient struct {
 	Client  *http.Client
 }
 
+type invocationStore interface {
+	LastInvocationHash(ctx context.Context, tenant uuid.UUID) (string, error)
+	InsertInvocationReceipt(ctx context.Context, tenant uuid.UUID, decisionID *uuid.UUID, requestID string, toolName string, method string, path string, outcome string, statusCode *int, latencyMs int, body json.RawMessage, prevHash string, hash string, traceID string, spanID string) error
+}
+
 type httpError struct {
 	Status int
 	Body   string
@@ -85,6 +90,7 @@ type invocationReceiptBody struct {
 	LatencyMs   int               `json:"latency_ms"`
 	Meta        map[string]string `json:"meta,omitempty"`
 	StartedAt   string            `json:"started_at"` // RFC3339
+	RequestID   string            `json:"request_id,omitempty"`
 	PEPMode     string            `json:"pep.mode,omitempty"`
 	Enforcement string            `json:"enforcement.outcome,omitempty"`
 }
@@ -94,6 +100,7 @@ type blockedResponse struct {
 	Message    string `json:"message"`
 	RequestID  string `json:"request_id"`
 	DecisionID string `json:"decision_id,omitempty"`
+	TraceID    string `json:"trace_id,omitempty"`
 }
 
 func registerV0(mux *http.ServeMux, logger *slog.Logger) {
@@ -160,7 +167,7 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 }
 
 // handleToolProxy enforces a PDP decision before proxying to upstream.
-func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store *dbstore.Store, pdp *PDPClient, proxy *httputil.ReverseProxy, pepMode string) http.Handler {
+func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationStore, pdp *PDPClient, proxy *httputil.ReverseProxy, pepMode string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tenantIDStr := r.Header.Get("x-umbra-tenant-id")
 		tenantID, err := uuid.Parse(tenantIDStr)
@@ -213,6 +220,11 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store *dbstore.St
 			traceCtx = &protocol.TraceContext{RequestID: reqID}
 		}
 
+		reqLogger := logger.With("request_id", reqID)
+		if sc.IsValid() {
+			reqLogger = reqLogger.With("trace_id", sc.TraceID().String(), "span_id", sc.SpanID().String())
+		}
+
 		payload := protocol.DecisionRequest{
 			Tenant: protocol.TenantContext{TenantID: tenantID.String()},
 			Actor:  protocol.Actor{Type: "user", ID: actorID, Roles: roles},
@@ -231,37 +243,41 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store *dbstore.St
 			attribute.String("http.method", r.Method),
 			attribute.String("http.route", upath),
 			attribute.String("pep.mode", pepMode),
+			attribute.String("umbra.request_id", reqID),
 		)
 
 		started := time.Now()
 		decision, status, err := pdp.Decide(ctx, payload)
 
 		if err != nil {
-			logger.Error("pdp decide failed", "err", err, "status", status)
-			writeInvocationReceipt(ctx, logger, store, tenantID, nil, toolName, r.Method, upath, "error", intPtr(http.StatusServiceUnavailable), int(time.Since(started).Milliseconds()),
+			reqLogger.Error("pdp decide failed", "err", err, "status", status)
+			writeInvocationReceipt(ctx, reqLogger, store, tenantID, nil, reqID, toolName, r.Method, upath, "error", intPtr(http.StatusServiceUnavailable), int(time.Since(started).Milliseconds()),
 				map[string]string{"stage": "pdp"}, started, pepMode, "")
 			http.Error(w, "pdp unavailable", http.StatusServiceUnavailable)
 			return
 		}
 
 		decisionID, _ := uuid.Parse(decision.DecisionID)
+		span.SetAttributes(attribute.String("umbra.decision_id", decision.DecisionID))
+		reqLogger = reqLogger.With("decision_id", decision.DecisionID)
+		reqLogger.Info("pdp decision received", "decision", decision.Decision)
 		if strings.ToLower(decision.Decision) != "allow" {
 			// Decision is DENY
 			if pepMode == "observe" {
 				// Observe mode: forward the request but record as denied/forwarded
-				logger.Info("deny decision in observe mode, forwarding", "tenant", tenantID, "decision_id", decision.DecisionID)
+				reqLogger.Info("deny decision in observe mode, forwarding", "tenant", tenantID.String())
 				r.URL.Path = upath
 				r.Host = "" // let reverse proxy set Host appropriately
 				proxy.ModifyResponse = func(resp *http.Response) error {
 					lat := int(time.Since(started).Milliseconds())
-					writeInvocationReceipt(ctx, logger, store, tenantID, &decisionID, toolName, r.Method, upath, "denied", intPtr(resp.StatusCode), lat,
+					writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, "denied", intPtr(resp.StatusCode), lat,
 						map[string]string{"reason": decision.Reason}, started, pepMode, "forwarded")
 					return nil
 				}
 				proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, e error) {
 					lat := int(time.Since(started).Milliseconds())
-					logger.Error("upstream error in observe mode", "err", e)
-					writeInvocationReceipt(ctx, logger, store, tenantID, &decisionID, toolName, r.Method, upath, "denied", intPtr(http.StatusBadGateway), lat,
+					reqLogger.Error("upstream error in observe mode", "err", e)
+					writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, "denied", intPtr(http.StatusBadGateway), lat,
 						map[string]string{"reason": decision.Reason}, started, pepMode, "forwarded")
 					http.Error(rw, "upstream error", http.StatusBadGateway)
 				}
@@ -269,9 +285,9 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store *dbstore.St
 				return
 			} else {
 				// Enforce mode: block the request
-				logger.Info("deny decision in enforce mode, blocking", "tenant", tenantID, "decision_id", decision.DecisionID)
+				reqLogger.Info("deny decision in enforce mode, blocking", "tenant", tenantID.String())
 				lat := int(time.Since(started).Milliseconds())
-				writeInvocationReceipt(ctx, logger, store, tenantID, &decisionID, toolName, r.Method, upath, "denied", intPtr(http.StatusForbidden), lat,
+				writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, "denied", intPtr(http.StatusForbidden), lat,
 					map[string]string{"reason": decision.Reason}, started, pepMode, "blocked")
 
 				// Return structured error response
@@ -282,6 +298,7 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store *dbstore.St
 					Message:    decision.Reason,
 					RequestID:  reqID,
 					DecisionID: decision.DecisionID,
+					TraceID:    traceCtx.TraceID,
 				}
 				_ = json.NewEncoder(w).Encode(resp)
 				return
@@ -293,14 +310,14 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store *dbstore.St
 		r.Host = "" // let reverse proxy set Host appropriately
 		proxy.ModifyResponse = func(resp *http.Response) error {
 			lat := int(time.Since(started).Milliseconds())
-			writeInvocationReceipt(ctx, logger, store, tenantID, &decisionID, toolName, r.Method, upath, "success", intPtr(resp.StatusCode), lat,
+			writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, "success", intPtr(resp.StatusCode), lat,
 				map[string]string{"upstream": proxyURLHost(proxy)}, started, pepMode, "forwarded")
 			return nil
 		}
 		proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, e error) {
 			lat := int(time.Since(started).Milliseconds())
-			logger.Error("upstream error", "err", e)
-			writeInvocationReceipt(ctx, logger, store, tenantID, &decisionID, toolName, r.Method, upath, "error", intPtr(http.StatusBadGateway), lat,
+			reqLogger.Error("upstream error", "err", e)
+			writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, "error", intPtr(http.StatusBadGateway), lat,
 				map[string]string{"upstream": proxyURLHost(proxy)}, started, pepMode, "forwarded")
 			http.Error(rw, "upstream error", http.StatusBadGateway)
 		}
@@ -309,7 +326,7 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store *dbstore.St
 	})
 }
 
-func writeInvocationReceipt(ctx context.Context, logger *slog.Logger, store *dbstore.Store, tenant uuid.UUID, decisionID *uuid.UUID,
+func writeInvocationReceipt(ctx context.Context, logger *slog.Logger, store invocationStore, tenant uuid.UUID, decisionID *uuid.UUID, requestID string,
 	toolName, method, path, outcome string, statusCode *int, latencyMs int, meta map[string]string, started time.Time, pepMode, enforcement string) {
 
 	if store == nil {
@@ -326,6 +343,7 @@ func writeInvocationReceipt(ctx context.Context, logger *slog.Logger, store *dbs
 		LatencyMs:   latencyMs,
 		Meta:        meta,
 		StartedAt:   started.UTC().Format(time.RFC3339),
+		RequestID:   requestID,
 		PEPMode:     pepMode,
 		Enforcement: enforcement,
 	}
@@ -349,7 +367,7 @@ func writeInvocationReceipt(ctx context.Context, logger *slog.Logger, store *dbs
 		traceID, spanID = sc.TraceID().String(), sc.SpanID().String()
 	}
 
-	if err := store.InsertInvocationReceipt(ctx, tenant, decisionID, toolName, method, path, outcome, statusCode, latencyMs, bodyBytes, prev, hash, traceID, spanID); err != nil {
+	if err := store.InsertInvocationReceipt(ctx, tenant, decisionID, requestID, toolName, method, path, outcome, statusCode, latencyMs, bodyBytes, prev, hash, traceID, spanID); err != nil {
 		logger.Error("receipt insert failed", "err", err)
 	}
 }

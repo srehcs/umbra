@@ -33,6 +33,7 @@ func (s *Store) LastInvocationHash(ctx context.Context, tenant uuid.UUID) (strin
 func (s *Store) InsertInvocationReceipt(ctx context.Context,
 	tenant uuid.UUID,
 	decisionID *uuid.UUID,
+	requestID string,
 	toolName string,
 	method string,
 	path string,
@@ -46,10 +47,11 @@ func (s *Store) InsertInvocationReceipt(ctx context.Context,
 	spanID string,
 ) error {
 	_, err := s.db.Exec(ctx, `
-    INSERT INTO receipts_invocation(tenant_id, decision_id, tool_name, method, path, outcome, status_code, latency_ms, body_json, prev_hash, hash, trace_id, span_id)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+    INSERT INTO receipts_invocation(tenant_id, decision_id, request_id, tool_name, method, path, outcome, status_code, latency_ms, body_json, prev_hash, hash, trace_id, span_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 		tenant,
 		decisionID,
+		nullIfEmpty(requestID),
 		toolName,
 		method,
 		path,

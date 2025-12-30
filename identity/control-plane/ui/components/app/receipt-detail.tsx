@@ -40,6 +40,7 @@ export default function ReceiptDetail({ r }: { r: Receipt }) {
               )}
             </div>
             <Field label="Decision ID" value={r.decision_id} />
+            <Field label="Request ID" value={r.request_id} />
             <Field label="Trace ID" value={r.trace_id} />
             <Field label="Span ID" value={r.span_id} />
           </CardContent>

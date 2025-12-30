@@ -209,6 +209,9 @@ components:
           items:
             $ref: '#/components/schemas/Obligation'
         reason: { type: string }
+        request_id: { type: string }
+        trace_id: { type: string }
+        span_id: { type: string }
       required: [decision, decision_id]
 
 Obligation:

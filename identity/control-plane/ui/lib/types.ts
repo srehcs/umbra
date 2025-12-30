@@ -9,6 +9,7 @@ export type DecisionReceipt = {
   decision_id: UUID;
   decision: "allow" | "deny";
   policy_hash?: string;
+  request_id?: string;
   hash: string;
   prev_hash?: string;
   trace_id?: string;
@@ -20,6 +21,7 @@ export type InvocationReceipt = {
   id: UUID;
   ts: string;
   decision_id: UUID;
+  request_id?: string;
   tool_name: string;
   method: string;
   path: string;

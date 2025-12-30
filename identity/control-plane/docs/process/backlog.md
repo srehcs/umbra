@@ -125,7 +125,7 @@ This backlog is designed to produce a **demo-worthy vertical slice** while enfor
 **Files**
 - `services/pdp/internal/decision/*` (new)
 - `services/pdp/internal/storage/*` (new)
-- `services/pdp/internal/httpapi/v0.go`
+- `services/pdp/internal/http-api/v0.go`
 
 **Acceptance Criteria**
 - Loads active policy for tenant
@@ -140,7 +140,7 @@ This backlog is designed to produce a **demo-worthy vertical slice** while enfor
 **Files**
 - `services/pep-gateway/internal/client/*` (new)
 - `services/pep-gateway/internal/receipts/*` (new)
-- `services/pep-gateway/internal/httpapi/v0.go`
+- `services/pep-gateway/internal/http-api/v0.go`
 
 **Acceptance Criteria**
 - Calls PDP w/ timeout + bounded retry
@@ -151,7 +151,7 @@ This backlog is designed to produce a **demo-worthy vertical slice** while enfor
 ### E3-S3 Control Plane CRUD (tools + policies)
 **Files**
 - `services/controlplane-api/internal/storage/*` (new)
-- `services/controlplane-api/internal/httpapi/v0.go`
+- `services/controlplane-api/internal/http-api/v0.go`
 
 **Acceptance Criteria**
 - CRUD for tools/policies is real (tenant-scoped)

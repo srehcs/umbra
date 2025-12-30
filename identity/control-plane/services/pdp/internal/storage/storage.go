@@ -55,6 +55,7 @@ func (s *Store) LastDecisionHash(ctx context.Context, tenant uuid.UUID) (string,
 func (s *Store) InsertDecisionReceipt(ctx context.Context,
 	tenant uuid.UUID,
 	decisionID uuid.UUID,
+	requestID string,
 	policyHash string,
 	decision string,
 	body json.RawMessage,
@@ -64,9 +65,9 @@ func (s *Store) InsertDecisionReceipt(ctx context.Context,
 	spanID string,
 ) error {
 	_, err := s.db.Exec(ctx, `
-    INSERT INTO receipts_decision(tenant_id, decision_id, policy_hash, decision, body_json, prev_hash, hash, trace_id, span_id)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		tenant, decisionID, policyHash, decision, body, nullIfEmpty(prevHash), hash, nullIfEmpty(traceID), nullIfEmpty(spanID))
+    INSERT INTO receipts_decision(tenant_id, decision_id, request_id, policy_hash, decision, body_json, prev_hash, hash, trace_id, span_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		tenant, decisionID, nullIfEmpty(requestID), policyHash, decision, body, nullIfEmpty(prevHash), hash, nullIfEmpty(traceID), nullIfEmpty(spanID))
 	return err
 }
 
