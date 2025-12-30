@@ -137,6 +137,8 @@ type invocationReceiptBody struct {
 	MCPTool        string          `json:"mcp.tool,omitempty"`
 	MCPMethod      string          `json:"mcp.method,omitempty"`
 	Workspace      string          `json:"workspace,omitempty"`
+	PolicyHash     string          `json:"policy_hash,omitempty"`
+	PolicyVersion  int             `json:"policy_version,omitempty"`
 	Outcome        string          `json:"outcome"`
 	StatusCode     *int            `json:"status_code,omitempty"`
 	PDPLatencyMs   int             `json:"pdp_latency_ms"`
@@ -235,7 +237,7 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 			Roles:  roles,
 			Source: "dev",
 		},
-		serverName:    serverName,
+		serverName: serverName,
 	}
 
 	mux.HandleFunc("/mcp", h.handleMCP)
@@ -420,12 +422,16 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 	decision, status, err := h.pdp.Decide(ctx, decisionReq)
 	pdpLatency := int(time.Since(pdpStarted).Milliseconds())
 	pdpStatus := "ok"
+	policyHash := ""
+	policyVersion := 0
 
 	var decisionID *uuid.UUID
 	if err == nil {
 		if parsed, err := uuid.Parse(decision.DecisionID); err == nil {
 			decisionID = &parsed
 		}
+		policyHash = decision.PolicyHash
+		policyVersion = decision.PolicyVersion
 		logger = logger.With("decision_id", decision.DecisionID)
 		span.SetAttributes(attribute.String("umbra.decision_id", decision.DecisionID))
 		logger.Info("pdp decision received", "decision", decision.Decision)
@@ -467,7 +473,7 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 	if forward {
 		forwardBody, err := buildForwardBody(req, params)
 		if err != nil {
-			writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, outcome, intPtr(http.StatusBadRequest), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
+			writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, policyHash, policyVersion, outcome, intPtr(http.StatusBadRequest), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
 			writeRPCError(w, http.StatusBadRequest, req.ID, "invalid request", "BAD_REQUEST", requestID)
 			return
 		}
@@ -475,7 +481,7 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 		toolStarted := time.Now()
 		toolReq, err := http.NewRequestWithContext(ctx, http.MethodPost, h.upstreamURL, bytes.NewReader(forwardBody))
 		if err != nil {
-			writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, "error", intPtr(http.StatusBadGateway), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
+			writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, policyHash, policyVersion, "error", intPtr(http.StatusBadGateway), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
 			writeRPCError(w, http.StatusBadGateway, req.ID, "upstream unavailable", "UPSTREAM_UNAVAILABLE", requestID)
 			return
 		}
@@ -484,7 +490,7 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 		toolRes, err := h.toolClient.Do(toolReq)
 		toolLatency = int(time.Since(toolStarted).Milliseconds())
 		if err != nil {
-			writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, "error", intPtr(http.StatusBadGateway), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
+			writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, policyHash, policyVersion, "error", intPtr(http.StatusBadGateway), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
 			writeRPCError(w, http.StatusBadGateway, req.ID, "upstream error", "UPSTREAM_ERROR", requestID)
 			return
 		}
@@ -498,14 +504,14 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 				outcome = "error"
 			}
 		}
-		writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, outcome, toolStatus, pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
+		writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, policyHash, policyVersion, outcome, toolStatus, pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
 		w.Header().Set("content-type", "application/json")
 		w.WriteHeader(toolRes.StatusCode)
 		_, _ = w.Write(toolBody)
 		return
 	}
 
-writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, outcome, intPtr(statusCode), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
+	writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, policyHash, policyVersion, outcome, intPtr(statusCode), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
 
 	if err != nil {
 		writeRPCError(w, http.StatusServiceUnavailable, req.ID, "policy unavailable", "POLICY_UNAVAILABLE", requestID)
@@ -547,7 +553,7 @@ func buildInvocationMeta(args map[string]interface{}, schemaVersion string) *inv
 	return meta
 }
 
-func writeInvocationReceipt(ctx context.Context, logger *slog.Logger, store invocationStore, tenant uuid.UUID, decisionID *uuid.UUID, requestID string, actor actorIdentity, mcpCtx protocol.MCPContext, outcome string, statusCode *int, pdpLatency, toolLatency, totalLatency int, meta *invocationMeta, started time.Time, pepMode, enforcement, pdpStatus, traceID, spanID string) {
+func writeInvocationReceipt(ctx context.Context, logger *slog.Logger, store invocationStore, tenant uuid.UUID, decisionID *uuid.UUID, requestID string, actor actorIdentity, mcpCtx protocol.MCPContext, policyHash string, policyVersion int, outcome string, statusCode *int, pdpLatency, toolLatency, totalLatency int, meta *invocationMeta, started time.Time, pepMode, enforcement, pdpStatus, traceID, spanID string) {
 	if store == nil {
 		logger.Warn("invocation receipt skipped (no store)")
 		return
@@ -563,6 +569,8 @@ func writeInvocationReceipt(ctx context.Context, logger *slog.Logger, store invo
 		MCPTool:        mcpCtx.Tool,
 		MCPMethod:      mcpCtx.Method,
 		Workspace:      mcpCtx.Workspace,
+		PolicyHash:     policyHash,
+		PolicyVersion:  policyVersion,
 		Outcome:        outcome,
 		StatusCode:     statusCode,
 		PDPLatencyMs:   pdpLatency,

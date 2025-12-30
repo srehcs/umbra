@@ -115,6 +115,27 @@ func (s *Store) CreatePolicy(ctx context.Context, tenant uuid.UUID, name string,
 	return p, err
 }
 
+func (s *Store) GetPolicy(ctx context.Context, tenant, policyID uuid.UUID) (Policy, error) {
+	var p Policy
+	err := s.db.QueryRow(ctx, `
+    SELECT id, tenant_id, name, version, active, policy_json, policy_hash, created_at, updated_at
+    FROM policies
+    WHERE tenant_id=$1 AND id=$2`,
+		tenant, policyID).Scan(&p.ID, &p.TenantID, &p.Name, &p.Version, &p.Active, &p.Policy, &p.PolicyHash, &p.CreatedAt, &p.UpdatedAt)
+	return p, err
+}
+
+func (s *Store) UpdatePolicy(ctx context.Context, tenant, policyID uuid.UUID, policy json.RawMessage, policyHash string) (Policy, error) {
+	var p Policy
+	err := s.db.QueryRow(ctx, `
+    UPDATE policies
+    SET policy_json=$3, policy_hash=$4, version=version+1, updated_at=now()
+    WHERE tenant_id=$1 AND id=$2 AND active=false
+    RETURNING id, tenant_id, name, version, active, policy_json, policy_hash, created_at, updated_at`,
+		tenant, policyID, policy, policyHash).Scan(&p.ID, &p.TenantID, &p.Name, &p.Version, &p.Active, &p.Policy, &p.PolicyHash, &p.CreatedAt, &p.UpdatedAt)
+	return p, err
+}
+
 func (s *Store) ActivatePolicy(ctx context.Context, tenant, policyID uuid.UUID) error {
 	// deactivate others, activate this one
 	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{})
@@ -126,10 +147,25 @@ func (s *Store) ActivatePolicy(ctx context.Context, tenant, policyID uuid.UUID) 
 	if _, err := tx.Exec(ctx, `UPDATE policies SET active=false WHERE tenant_id=$1`, tenant); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE policies SET active=true, updated_at=now() WHERE tenant_id=$1 AND id=$2`, tenant, policyID); err != nil {
+	tag, err := tx.Exec(ctx, `UPDATE policies SET active=true, updated_at=now() WHERE tenant_id=$1 AND id=$2`, tenant, policyID)
+	if err != nil {
 		return err
 	}
+	if tag.RowsAffected() == 0 {
+		return stor.ErrNotFound
+	}
 	return tx.Commit(ctx)
+}
+
+func (s *Store) GetActivePolicy(ctx context.Context, tenant uuid.UUID) (Policy, error) {
+	var p Policy
+	err := s.db.QueryRow(ctx, `
+    SELECT id, tenant_id, name, version, active, policy_json, policy_hash, created_at, updated_at
+    FROM policies
+    WHERE tenant_id=$1 AND active=true
+    ORDER BY updated_at DESC
+    LIMIT 1`, tenant).Scan(&p.ID, &p.TenantID, &p.Name, &p.Version, &p.Active, &p.Policy, &p.PolicyHash, &p.CreatedAt, &p.UpdatedAt)
+	return p, err
 }
 
 type Receipt struct {
@@ -202,6 +238,8 @@ func (s *Store) ListReceipts(ctx context.Context, tenant uuid.UUID, limit int, k
       'outcome', outcome,
       'status_code', status_code,
       'latency_ms', latency_ms,
+      'policy_hash', body_json->>'policy_hash',
+      'policy_version', (body_json->>'policy_version')::int,
       'hash', hash,
       'prev_hash', prev_hash,
       'trace_id', trace_id,

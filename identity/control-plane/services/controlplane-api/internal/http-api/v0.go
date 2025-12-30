@@ -8,12 +8,14 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/policy"
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/receipts"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	stor "github.com/umbra-labs/agent-identity-control-plane/packages/go/storage"
 	dbstore "github.com/umbra-labs/agent-identity-control-plane/services/controlplane-api/internal/storage"
@@ -22,6 +24,30 @@ import (
 type Server struct {
 	Logger *slog.Logger
 	Store  *dbstore.Store
+}
+
+type policyResponse struct {
+	ID         uuid.UUID       `json:"id"`
+	Name       string          `json:"name"`
+	Version    int             `json:"version"`
+	Active     bool            `json:"active"`
+	Policy     json.RawMessage `json:"policy"`
+	PolicyHash string          `json:"policy_hash"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+	CreatedAt  time.Time       `json:"created_at"`
+}
+
+func policyResponseFrom(p dbstore.Policy) policyResponse {
+	return policyResponse{
+		ID:         p.ID,
+		Name:       p.Name,
+		Version:    p.Version,
+		Active:     p.Active,
+		Policy:     p.Policy,
+		PolicyHash: p.PolicyHash,
+		UpdatedAt:  p.UpdatedAt,
+		CreatedAt:  p.CreatedAt,
+	}
 }
 
 type ListReceiptsResponse struct {
@@ -51,7 +77,9 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 
 	mux.HandleFunc("/v1/tools", s.handleTools)
 	mux.HandleFunc("/v1/policies", s.handlePolicies)
+	mux.HandleFunc("/v1/policies/active", s.handleActivePolicy)
 	mux.HandleFunc("/v1/policies/activate", s.handleActivatePolicy)
+	mux.HandleFunc("/v1/policies/", s.handlePolicyByID)
 	mux.HandleFunc("/v1/policies/simulate", s.handleSimulatePolicy)
 	mux.HandleFunc("/v1/receipts", s.handleReceipts)
 	mux.HandleFunc("/v1/receipts/verify", s.handleReceiptsVerify)
@@ -134,7 +162,11 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "db error", 500)
 			return
 		}
-		writeJSON(w, map[string]interface{}{"items": items})
+		out := make([]policyResponse, 0, len(items))
+		for _, p := range items {
+			out = append(out, policyResponseFrom(p))
+		}
+		writeJSON(w, map[string]interface{}{"items": out})
 	case http.MethodPost:
 		var body struct {
 			Name   string          `json:"name"`
@@ -179,7 +211,7 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
-		writeJSON(w, p)
+		writeJSON(w, policyResponseFrom(p))
 		s.Logger.Info("policy created",
 			"tenant_id", tenant.String(),
 			"policy_id", p.ID.String(),
@@ -217,9 +249,187 @@ func (s *Server) handleActivatePolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid policy_id", 400)
 		return
 	}
+	s.activatePolicyByID(w, r, tenant, pid)
+}
+
+func (s *Server) handlePolicyByID(w http.ResponseWriter, r *http.Request) {
+	if s.Store == nil {
+		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
+		return
+	}
+	tenant, err := s.tenantFromRequest(r)
+	if err != nil || tenant == uuid.Nil {
+		http.Error(w, "missing/invalid x-umbra-tenant-id", http.StatusBadRequest)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/v1/policies/")
+	path = strings.Trim(path, "/")
+	if path == "" {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	parts := strings.Split(path, "/")
+	policyID, err := uuid.Parse(parts[0])
+	if err != nil {
+		http.Error(w, "invalid policy id", http.StatusBadRequest)
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "activate" {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		s.activatePolicyByID(w, r, tenant, policyID)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		p, err := s.Store.GetPolicy(ctx, tenant, policyID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, "db error", 500)
+			return
+		}
+		writeJSON(w, policyResponseFrom(p))
+	case http.MethodPut:
+		var body struct {
+			Policy json.RawMessage `json:"policy"`
+		}
+		if err := decodeJSON(r, &body); err != nil {
+			http.Error(w, "invalid json", 400)
+			return
+		}
+		if len(body.Policy) == 0 {
+			http.Error(w, "policy required", 400)
+			return
+		}
+
+		validationErrs, policyHash, policySize := policy.ValidatePolicyWithSize(body.Policy)
+		if len(validationErrs) > 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			response := map[string]interface{}{
+				"code":    policy.ErrorCodePolicyInvalid,
+				"message": "policy validation failed",
+				"errors":  validationErrs,
+			}
+			if reqID := r.Header.Get("x-request-id"); reqID != "" {
+				response["request_id"] = reqID
+			}
+			writeJSON(w, response)
+			s.Logger.Warn("policy validation failed",
+				"tenant_id", tenant.String(),
+				"policy_id", policyID.String(),
+				"policy_size", policySize,
+				"error_count", len(validationErrs),
+			)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+
+		existing, err := s.Store.GetPolicy(ctx, tenant, policyID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, "db error", 500)
+			return
+		}
+		if existing.Active {
+			http.Error(w, "cannot update active policy", http.StatusConflict)
+			return
+		}
+
+		p, err := s.Store.UpdatePolicy(ctx, tenant, policyID, body.Policy, policyHash)
+		if err != nil {
+			http.Error(w, "db error", 500)
+			return
+		}
+		writeJSON(w, policyResponseFrom(p))
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleActivePolicy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Store == nil {
+		http.Error(w, "storage not configured", 503)
+		return
+	}
+	tenant, err := s.tenantFromRequest(r)
+	if err != nil || tenant == uuid.Nil {
+		http.Error(w, "missing/invalid x-umbra-tenant-id", 400)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	if err := s.Store.ActivatePolicy(ctx, tenant, pid); err != nil {
+	p, err := s.Store.GetActivePolicy(ctx, tenant)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "no active policy", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "db error", 500)
+		return
+	}
+	writeJSON(w, map[string]interface{}{
+		"id":          p.ID,
+		"name":        p.Name,
+		"version":     p.Version,
+		"policy_hash": p.PolicyHash,
+		"updated_at":  p.UpdatedAt,
+	})
+}
+
+func (s *Server) activatePolicyByID(w http.ResponseWriter, r *http.Request, tenant uuid.UUID, policyID uuid.UUID) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	p, err := s.Store.GetPolicy(ctx, tenant, policyID)
+	if err != nil {
+		if errors.Is(err, stor.ErrNotFound) || errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "db error", 500)
+		return
+	}
+
+	validationErrs, _, _ := policy.ValidatePolicyWithSize(p.Policy)
+	if len(validationErrs) > 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		response := map[string]interface{}{
+			"code":    policy.ErrorCodePolicyInvalid,
+			"message": "policy validation failed",
+			"errors":  validationErrs,
+		}
+		if reqID := r.Header.Get("x-request-id"); reqID != "" {
+			response["request_id"] = reqID
+		}
+		writeJSON(w, response)
+		return
+	}
+
+	if err := s.Store.ActivatePolicy(ctx, tenant, policyID); err != nil {
+		if errors.Is(err, stor.ErrNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "db error", 500)
 		return
 	}

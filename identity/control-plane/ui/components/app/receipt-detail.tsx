@@ -54,6 +54,7 @@ export default function ReceiptDetail({ r }: { r: Receipt }) {
             <Field label="Hash" value={r.hash} />
             <Field label="Previous hash" value={r.prev_hash} />
             {kind === "decision" && <Field label="Policy hash" value={r.policy_hash} />}
+            {kind === "invocation" && <Field label="Policy hash" value={r.policy_hash} />}
           </CardContent>
         </Card>
       </div>
