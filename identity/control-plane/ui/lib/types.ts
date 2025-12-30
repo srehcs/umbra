@@ -41,8 +41,11 @@ export type Receipt = DecisionReceipt | InvocationReceipt;
 export type Tool = {
   id: UUID;
   name: string;
-  endpoint: string;
-  active: boolean;
+  kind: string;
+  config?: Record<string, unknown>;
+  tenant_id?: UUID;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type PolicyRow = {

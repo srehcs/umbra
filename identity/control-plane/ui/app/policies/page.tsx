@@ -59,6 +59,10 @@ export default function PoliciesPage() {
     }
   }
 
+  function handleRefresh() {
+    void refresh();
+  }
+
   React.useEffect(() => {
     const controller = new AbortController();
     refresh(controller.signal);
@@ -257,7 +261,7 @@ export default function PoliciesPage() {
             </div>
 
             <DialogFooter>
-              <Button variant="secondary" onClick={refresh} disabled={loading}>Refresh</Button>
+              <Button variant="secondary" onClick={handleRefresh} disabled={loading}>Refresh</Button>
               <Button onClick={create}>Create</Button>
             </DialogFooter>
           </DialogContent>

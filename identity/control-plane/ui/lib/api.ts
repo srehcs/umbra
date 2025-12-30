@@ -24,8 +24,8 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
 export const api = {
   // Tools
   listTools: (signal?: AbortSignal) =>
-    request<{ items: Tool[] }>("/v1/tools", { signal }),
-  createTool: (body: { name: string; endpoint: string }) =>
+    request<{ items: Tool[] }>("/v1/tools", signal ? { signal } : {}),
+  createTool: (body: { name: string; kind: string; config: unknown }) =>
     request<{ id: string }>("/v1/tools", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -36,7 +36,7 @@ export const api = {
 
   // Policies
   listPolicies: (signal?: AbortSignal) =>
-    request<{ items: PolicyRow[] }>("/v1/policies", { signal }),
+    request<{ items: PolicyRow[] }>("/v1/policies", signal ? { signal } : {}),
   createPolicy: (body: { name: string; policy: unknown }) =>
     request<{ id: string }>("/v1/policies", {
       method: "POST",
@@ -66,6 +66,9 @@ export const api = {
     if (params.kind) sp.set("kind", params.kind);
     if (params.q) sp.set("q", params.q);
     if (params.before) sp.set("before", params.before);
-    return request<ListResponse<Receipt>>(`/v1/receipts?${sp.toString()}`, { signal });
+    return request<ListResponse<Receipt>>(
+      `/v1/receipts?${sp.toString()}`,
+      signal ? { signal } : {},
+    );
   },
 };
