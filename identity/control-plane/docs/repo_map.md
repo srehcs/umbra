@@ -16,6 +16,11 @@
 - `services/pep-gateway/`
   - enforcement entrypoint for demo (MCP/CLI expansion path)
   - calls PDP then records invocation receipt
+- `services/mcp-adapter/`
+  - MCP tool-call enforcement adapter (PEP)
+  - calls PDP then forwards to MCP upstream
+- `services/mcp-upstream/`
+  - demo MCP server for local stack
 
 ### Packages
 - `packages/go/policy/`
@@ -34,7 +39,7 @@
 ### Docs
 - `docs/`
   - `api/openapi.yaml` — API contract
-  - `adr/` — architectural decisions
+  - `/docs/adr/` — architectural decisions (centralized)
   - `architecture/` — C4 diagrams (context/containers/components)
   - `security/` — threat model and OIDC “path to yes”
   - `examples/` — curl scripts for demo flows

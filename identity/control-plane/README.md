@@ -41,7 +41,7 @@ Open:
 - PEP Gateway: http://localhost:8082
 
 Demo script:
-- `docs/04_playbook_demo.md`
+- `docs/runbooks/demo.md`
 - Examples: `docs/examples/`
 
 ---
@@ -50,7 +50,7 @@ Demo script:
 
 Start here:
 - `docs/00_exec_summary.md`
-- `docs/04_playbook_demo.md`
+- `docs/runbooks/demo.md`
 
 Engineering rules (umbrella-level):
 - `../../RULES.md`

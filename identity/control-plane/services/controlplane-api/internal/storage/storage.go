@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/umbra-labs/agent-identity-control-plane/packages/go/receipts"
 	stor "github.com/umbra-labs/agent-identity-control-plane/packages/go/storage"
 )
 
@@ -114,6 +115,27 @@ func (s *Store) CreatePolicy(ctx context.Context, tenant uuid.UUID, name string,
 	return p, err
 }
 
+func (s *Store) GetPolicy(ctx context.Context, tenant, policyID uuid.UUID) (Policy, error) {
+	var p Policy
+	err := s.db.QueryRow(ctx, `
+    SELECT id, tenant_id, name, version, active, policy_json, policy_hash, created_at, updated_at
+    FROM policies
+    WHERE tenant_id=$1 AND id=$2`,
+		tenant, policyID).Scan(&p.ID, &p.TenantID, &p.Name, &p.Version, &p.Active, &p.Policy, &p.PolicyHash, &p.CreatedAt, &p.UpdatedAt)
+	return p, err
+}
+
+func (s *Store) UpdatePolicy(ctx context.Context, tenant, policyID uuid.UUID, policy json.RawMessage, policyHash string) (Policy, error) {
+	var p Policy
+	err := s.db.QueryRow(ctx, `
+    UPDATE policies
+    SET policy_json=$3, policy_hash=$4, version=version+1, updated_at=now()
+    WHERE tenant_id=$1 AND id=$2 AND active=false
+    RETURNING id, tenant_id, name, version, active, policy_json, policy_hash, created_at, updated_at`,
+		tenant, policyID, policy, policyHash).Scan(&p.ID, &p.TenantID, &p.Name, &p.Version, &p.Active, &p.Policy, &p.PolicyHash, &p.CreatedAt, &p.UpdatedAt)
+	return p, err
+}
+
 func (s *Store) ActivatePolicy(ctx context.Context, tenant, policyID uuid.UUID) error {
 	// deactivate others, activate this one
 	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{})
@@ -125,16 +147,46 @@ func (s *Store) ActivatePolicy(ctx context.Context, tenant, policyID uuid.UUID) 
 	if _, err := tx.Exec(ctx, `UPDATE policies SET active=false WHERE tenant_id=$1`, tenant); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE policies SET active=true, updated_at=now() WHERE tenant_id=$1 AND id=$2`, tenant, policyID); err != nil {
+	tag, err := tx.Exec(ctx, `UPDATE policies SET active=true, updated_at=now() WHERE tenant_id=$1 AND id=$2`, tenant, policyID)
+	if err != nil {
 		return err
 	}
+	if tag.RowsAffected() == 0 {
+		return stor.ErrNotFound
+	}
 	return tx.Commit(ctx)
+}
+
+func (s *Store) GetActivePolicy(ctx context.Context, tenant uuid.UUID) (Policy, error) {
+	var p Policy
+	err := s.db.QueryRow(ctx, `
+    SELECT id, tenant_id, name, version, active, policy_json, policy_hash, created_at, updated_at
+    FROM policies
+    WHERE tenant_id=$1 AND active=true
+    ORDER BY updated_at DESC
+    LIMIT 1`, tenant).Scan(&p.ID, &p.TenantID, &p.Name, &p.Version, &p.Active, &p.Policy, &p.PolicyHash, &p.CreatedAt, &p.UpdatedAt)
+	return p, err
 }
 
 type Receipt struct {
 	Kind string          `json:"kind"` // decision|invocation
 	TS   time.Time       `json:"ts"`
 	Data json.RawMessage `json:"data"`
+}
+
+func (s *Store) ListReceiptChain(ctx context.Context, tenant uuid.UUID, limit int, kind string) ([]receipts.ChainRecord, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	switch kind {
+	case "decision":
+		return s.listReceiptChain(ctx, tenant, limit, "receipts_decision")
+	case "invocation":
+		return s.listReceiptChain(ctx, tenant, limit, "receipts_invocation")
+	default:
+		return nil, stor.ErrNotFound
+	}
 }
 
 func (s *Store) ListReceipts(ctx context.Context, tenant uuid.UUID, limit int, kind string, q string, before *time.Time) ([]json.RawMessage, *time.Time, error) {
@@ -160,6 +212,7 @@ func (s *Store) ListReceipts(ctx context.Context, tenant uuid.UUID, limit int, k
       'kind','decision',
       'id', id,
       'decision_id', decision_id,
+      'request_id', request_id,
       'policy_hash', policy_hash,
       'decision', decision,
       'hash', hash,
@@ -178,12 +231,15 @@ func (s *Store) ListReceipts(ctx context.Context, tenant uuid.UUID, limit int, k
       'kind','invocation',
       'id', id,
       'decision_id', decision_id,
+      'request_id', request_id,
       'tool_name', tool_name,
       'method', method,
       'path', path,
       'outcome', outcome,
       'status_code', status_code,
       'latency_ms', latency_ms,
+      'policy_hash', body_json->>'policy_hash',
+      'policy_version', (body_json->>'policy_version')::int,
       'hash', hash,
       'prev_hash', prev_hash,
       'trace_id', trace_id,
@@ -194,7 +250,7 @@ func (s *Store) ListReceipts(ctx context.Context, tenant uuid.UUID, limit int, k
     ORDER BY ts DESC
     LIMIT $2`
 
-	out := []json.RawMessage{}
+	out := []map[string]interface{}{}
 	// Decisions
 	if kind == "" || kind == "decision" || kind == "all" {
 		drows, err := s.db.Query(ctx, dsql, argsD...)
@@ -274,7 +330,58 @@ func (s *Store) ListReceipts(ctx context.Context, tenant uuid.UUID, limit int, k
 		t, _ := out[len(out)-1]["ts"].(time.Time)
 		next = &t
 	}
-	return out, next, nil
+
+	items := make([]json.RawMessage, 0, len(out))
+	for _, r := range out {
+		b, err := json.Marshal(r)
+		if err != nil {
+			return nil, nil, err
+		}
+		items = append(items, b)
+	}
+	return items, next, nil
+}
+
+func (s *Store) listReceiptChain(ctx context.Context, tenant uuid.UUID, limit int, table string) ([]receipts.ChainRecord, error) {
+	rows, err := s.db.Query(ctx, `
+    SELECT id, body_json, prev_hash, hash, ts
+    FROM `+table+`
+    WHERE tenant_id=$1
+    ORDER BY ts DESC
+    LIMIT $2`, tenant, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []receipts.ChainRecord{}
+	for rows.Next() {
+		var id uuid.UUID
+		var body []byte
+		var prev *string
+		var hash string
+		var ts time.Time
+		if err := rows.Scan(&id, &body, &prev, &hash, &ts); err != nil {
+			return nil, err
+		}
+		prevVal := ""
+		if prev != nil {
+			prevVal = *prev
+		}
+		out = append(out, receipts.ChainRecord{
+			ID:       id.String(),
+			Body:     body,
+			PrevHash: prevVal,
+			Hash:     hash,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
 }
 
 func itoa(i int) string {

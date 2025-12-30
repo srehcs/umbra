@@ -6,4 +6,4 @@
 4) **Data boundary**: Postgres contains tenant-separated data; strict query hygiene required.
 5) **Telemetry boundary**: OTel pipeline must not leak secrets; receipts are metadata-only.
 
-V0: mTLS and service-to-service auth is stubbed; ADR required before production.
+V0 runs on local/dev trust. Production requires mTLS and service-to-service auth before launch.

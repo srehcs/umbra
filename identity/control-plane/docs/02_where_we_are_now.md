@@ -14,13 +14,15 @@ This document is a reality check: **what is implemented in this repo** vs **what
 - **PEP Gateway (HTTP)**:
   - demo enforcement route that calls PDP before forwarding
   - writes invocation receipts (hash-chained, signing-ready)
+- **MCP adapter**:
+  - intercepts MCP tool calls (`tools/call`) and converts to PDP requests
+  - enforces allow/deny and emits invocation receipts
 - **UI (Next.js + ShadCN)**:
   - tools
   - policies (author + activate)
   - receipts table + structured detail view
 
 ## Planned (documented, not fully implemented)
-- **MCP adapter**: intercept MCP tool calls and convert to PDP requests.
 - **CLI wrapper**: capture tool invocations and convert to PDP requests + receipts.
 - **OIDC / Keycloak**: replace dev tenant header with claims-based tenancy and RBAC.
 - **Signature verification**: keep hash-chain; add signing keys and verification pipeline.

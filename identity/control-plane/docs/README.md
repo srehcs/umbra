@@ -5,7 +5,7 @@
 2) `01_vision.md`
 3) `02_where_we_are_now.md`
 4) `03_next_steps.md`
-5) `04_playbook_demo.md`
+5) `runbooks/demo.md`
 
 ## Engineering execution
 - `playbook.md` (how we ship safely, day-to-day)
@@ -13,7 +13,7 @@
 
 ## Architecture & decisions
 - `architecture/` (C4: context/containers/components)
-- `adr/` (architecture decisions)
+- `/docs/adr/` (architecture decisions, centralized)
 
 ## API contract
 - `api/openapi.yaml`
@@ -26,6 +26,8 @@
 - `runbooks/`
 - `examples/`
 
+## Receipts integrity
+- `receipts_integrity.md`
+
 ## Navigation
 - `repo_map.md`
-- `acronyms.md`
