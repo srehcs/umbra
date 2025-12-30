@@ -21,14 +21,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with:
+          version: "9.0.0"
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "pnpm"
           cache-dependency-path: identity/control-plane/ui/pnpm-lock.yaml
-      - uses: pnpm/action-setup@v3
-        with:
-          version: "9.0.0"
       - name: pnpm install
         working-directory: identity/control-plane/ui
         run: pnpm install --frozen-lockfile
