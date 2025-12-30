@@ -33,6 +33,13 @@ type receiptBody struct {
 	SpanID        string         `json:"span_id,omitempty"`
 }
 
+type errorResponse struct {
+	ErrorCode string `json:"error_code"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id,omitempty"`
+	TraceID   string `json:"trace_id,omitempty"`
+}
+
 func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 	dsn := os.Getenv("DATABASE_URL")
 	db, err := stor.Connect(context.Background(), dsn)
@@ -59,7 +66,7 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&req); err != nil {
-			http.Error(w, "invalid json", http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, "POLICY_INVALID", "invalid json", "", "")
 			return
 		}
 
@@ -76,7 +83,7 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 
 		tenantID, err := uuid.Parse(req.Tenant.TenantID)
 		if err != nil || tenantID == uuid.Nil {
-			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, "POLICY_INVALID", "invalid tenant_id", requestID, traceID)
 			return
 		}
 
@@ -125,15 +132,7 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 
 		var pol policy.Policy
 		if err := json.Unmarshal(ap.Policy, &pol); err != nil {
-			resp := protocol.DecisionResponse{
-				Decision:   "deny",
-				DecisionID: uuid.NewString(),
-				Reason:     "invalid policy json (default deny)",
-				RequestID:  requestID,
-				TraceID:    traceID,
-				SpanID:     spanID,
-			}
-			writeJSON(w, resp)
+			writeError(w, http.StatusInternalServerError, "POLICY_INVALID", "invalid policy json", requestID, traceID)
 			return
 		}
 
@@ -206,4 +205,15 @@ func writeDecisionReceipt(ctx context.Context, logger *slog.Logger, store *dbsto
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, code, message, requestID, traceID string) {
+	w.Header().Set("content-type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(errorResponse{
+		ErrorCode: code,
+		Message:   message,
+		RequestID: requestID,
+		TraceID:   traceID,
+	})
 }

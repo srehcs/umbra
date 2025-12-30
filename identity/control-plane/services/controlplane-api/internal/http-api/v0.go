@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -82,6 +83,7 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 	mux.HandleFunc("/v1/policies/", s.handlePolicyByID)
 	mux.HandleFunc("/v1/policies/simulate", s.handleSimulatePolicy)
 	mux.HandleFunc("/v1/receipts", s.handleReceipts)
+	mux.HandleFunc("/v1/receipts/export", s.handleReceiptsExport)
 	mux.HandleFunc("/v1/receipts/verify", s.handleReceiptsVerify)
 }
 
@@ -592,6 +594,98 @@ func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+func (s *Server) handleReceiptsExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Store == nil {
+		http.Error(w, "storage not configured", 503)
+		return
+	}
+	tenant, err := s.tenantFromRequest(r)
+	if err != nil || tenant == uuid.Nil {
+		http.Error(w, "missing/invalid x-umbra-tenant-id", 400)
+		return
+	}
+
+	q := r.URL.Query()
+	format := strings.ToLower(strings.TrimSpace(q.Get("format")))
+	if format == "" {
+		format = "json"
+	}
+	if format != "json" && format != "csv" {
+		http.Error(w, "invalid format", 400)
+		return
+	}
+
+	var fromPtr *time.Time
+	if from := strings.TrimSpace(q.Get("from")); from != "" {
+		t, err := time.Parse(time.RFC3339, from)
+		if err != nil {
+			http.Error(w, "invalid from", 400)
+			return
+		}
+		fromPtr = &t
+	}
+	var toPtr *time.Time
+	if to := strings.TrimSpace(q.Get("to")); to != "" {
+		t, err := time.Parse(time.RFC3339, to)
+		if err != nil {
+			http.Error(w, "invalid to", 400)
+			return
+		}
+		toPtr = &t
+	}
+
+	decision := strings.ToLower(strings.TrimSpace(q.Get("decision")))
+	if decision != "" && decision != "allow" && decision != "deny" {
+		http.Error(w, "invalid decision", 400)
+		return
+	}
+
+	limit := 100
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+
+	filters := dbstore.ExportFilters{
+		From:       fromPtr,
+		To:         toPtr,
+		ActorID:    q.Get("actor_id"),
+		Tool:       q.Get("tool"),
+		Decision:   decision,
+		RequestID:  q.Get("request_id"),
+		DecisionID: q.Get("decision_id"),
+		Limit:      limit,
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	if format == "csv" {
+		w.Header().Set("content-type", "text/csv")
+		w.Header().Set("content-disposition", "attachment; filename=receipts_export.csv")
+		if err := s.Store.ExportReceiptsCSV(ctx, tenant, filters, w); err != nil {
+			http.Error(w, "db error", 500)
+		}
+		return
+	}
+
+	items, err := s.Store.ExportReceipts(ctx, tenant, filters)
+	if err != nil {
+		http.Error(w, "db error", 500)
+		return
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"schema_version": "v1",
+		"items":          items,
+	})
+}
+
 func (s *Server) handleReceiptsVerify(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -693,6 +787,15 @@ func decodeJSON(r *http.Request, v interface{}) error {
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeReceiptsCSV(w http.ResponseWriter, items []dbstore.ExportRecord) {
+	writer := csv.NewWriter(w)
+	dbstore.WriteReceiptsCSVHeader(writer)
+	for _, item := range items {
+		dbstore.WriteReceiptsCSVRecord(writer, item)
+	}
+	writer.Flush()
 }
 
 func getenv(k, def string) string {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -29,6 +30,8 @@ type PDPClient struct {
 	BaseURL string
 	Client  *http.Client
 }
+
+const maxPDPResponseBytes = 1 << 20
 
 type invocationStore interface {
 	LastInvocationHash(ctx context.Context, tenant uuid.UUID) (string, error)
@@ -61,7 +64,7 @@ func (c *PDPClient) Decide(ctx context.Context, payload protocol.DecisionRequest
 	}
 	defer res.Body.Close()
 
-	body, _ := io.ReadAll(res.Body)
+	body, _ := io.ReadAll(io.LimitReader(res.Body, maxPDPResponseBytes))
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return out, res.StatusCode, &httpError{Status: res.StatusCode, Body: string(body)}
 	}
@@ -87,10 +90,13 @@ type invocationReceiptBody struct {
 	Path          string            `json:"path"`
 	PolicyHash    string            `json:"policy_hash,omitempty"`
 	PolicyVersion int               `json:"policy_version,omitempty"`
+	Decision      string            `json:"decision.result,omitempty"`
 	Outcome       string            `json:"outcome"`
 	StatusCode    *int              `json:"status_code,omitempty"`
 	LatencyMs     int               `json:"latency_ms"`
 	Meta          map[string]string `json:"meta,omitempty"`
+	PDPStatus     string            `json:"pdp.status,omitempty"`
+	PDPErrorCode  string            `json:"pdp.error_code,omitempty"`
 	StartedAt     string            `json:"started_at"` // RFC3339
 	RequestID     string            `json:"request_id,omitempty"`
 	PEPMode       string            `json:"pep.mode,omitempty"`
@@ -257,10 +263,41 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 		decision, status, err := pdp.Decide(ctx, payload)
 
 		if err != nil {
+			pdpStatus, pdpErrorCode := classifyPDPError(err, status)
 			reqLogger.Error("pdp decide failed", "err", err, "status", status)
-			writeInvocationReceipt(ctx, reqLogger, store, tenantID, nil, reqID, toolName, r.Method, upath, "", 0, "error", intPtr(http.StatusServiceUnavailable), int(time.Since(started).Milliseconds()),
-				map[string]string{"stage": "pdp"}, started, pepMode, "")
-			http.Error(w, "pdp unavailable", http.StatusServiceUnavailable)
+			if pepMode == "observe" {
+				reqLogger.Info("pdp unavailable in observe mode, forwarding", "tenant", tenantID.String())
+				r.URL.Path = upath
+				r.Host = ""
+				proxy.ModifyResponse = func(resp *http.Response) error {
+					lat := int(time.Since(started).Milliseconds())
+					writeInvocationReceipt(ctx, reqLogger, store, tenantID, nil, reqID, toolName, r.Method, upath, "", 0, "error", intPtr(resp.StatusCode), lat,
+						map[string]string{"stage": "pdp"}, "unavailable", pdpStatus, pdpErrorCode, started, pepMode, "forwarded")
+					return nil
+				}
+				proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, e error) {
+					lat := int(time.Since(started).Milliseconds())
+					reqLogger.Error("upstream error in observe mode (pdp unavailable)", "err", e)
+					writeInvocationReceipt(ctx, reqLogger, store, tenantID, nil, reqID, toolName, r.Method, upath, "", 0, "error", intPtr(http.StatusBadGateway), lat,
+						map[string]string{"stage": "pdp"}, "unavailable", pdpStatus, pdpErrorCode, started, pepMode, "forwarded")
+					http.Error(rw, "upstream error", http.StatusBadGateway)
+				}
+				proxy.ServeHTTP(w, r)
+				return
+			}
+
+			lat := int(time.Since(started).Milliseconds())
+			writeInvocationReceipt(ctx, reqLogger, store, tenantID, nil, reqID, toolName, r.Method, upath, "", 0, "denied", intPtr(http.StatusServiceUnavailable), lat,
+				map[string]string{"stage": "pdp"}, "unavailable", pdpStatus, pdpErrorCode, started, pepMode, "blocked")
+			w.Header().Set("content-type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			resp := blockedResponse{
+				ErrorCode: "POLICY_UNAVAILABLE",
+				Message:   "pdp unavailable",
+				RequestID: reqID,
+				TraceID:   traceCtx.TraceID,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 
@@ -278,14 +315,14 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 				proxy.ModifyResponse = func(resp *http.Response) error {
 					lat := int(time.Since(started).Milliseconds())
 					writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, decision.PolicyHash, decision.PolicyVersion, "denied", intPtr(resp.StatusCode), lat,
-						map[string]string{"reason": decision.Reason}, started, pepMode, "forwarded")
+						map[string]string{"reason": decision.Reason}, decision.Decision, "ok", "", started, pepMode, "forwarded")
 					return nil
 				}
 				proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, e error) {
 					lat := int(time.Since(started).Milliseconds())
 					reqLogger.Error("upstream error in observe mode", "err", e)
 					writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, decision.PolicyHash, decision.PolicyVersion, "denied", intPtr(http.StatusBadGateway), lat,
-						map[string]string{"reason": decision.Reason}, started, pepMode, "forwarded")
+						map[string]string{"reason": decision.Reason}, decision.Decision, "ok", "", started, pepMode, "forwarded")
 					http.Error(rw, "upstream error", http.StatusBadGateway)
 				}
 				proxy.ServeHTTP(w, r)
@@ -295,7 +332,7 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 				reqLogger.Info("deny decision in enforce mode, blocking", "tenant", tenantID.String())
 				lat := int(time.Since(started).Milliseconds())
 				writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, decision.PolicyHash, decision.PolicyVersion, "denied", intPtr(http.StatusForbidden), lat,
-					map[string]string{"reason": decision.Reason}, started, pepMode, "blocked")
+					map[string]string{"reason": decision.Reason}, decision.Decision, "ok", "", started, pepMode, "blocked")
 
 				// Return structured error response
 				w.Header().Set("content-type", "application/json")
@@ -318,14 +355,14 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 		proxy.ModifyResponse = func(resp *http.Response) error {
 			lat := int(time.Since(started).Milliseconds())
 			writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, decision.PolicyHash, decision.PolicyVersion, "success", intPtr(resp.StatusCode), lat,
-				map[string]string{"upstream": proxyURLHost(proxy)}, started, pepMode, "forwarded")
+				map[string]string{"upstream": proxyURLHost(proxy)}, decision.Decision, "ok", "", started, pepMode, "forwarded")
 			return nil
 		}
 		proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, e error) {
 			lat := int(time.Since(started).Milliseconds())
 			reqLogger.Error("upstream error", "err", e)
 			writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, decision.PolicyHash, decision.PolicyVersion, "error", intPtr(http.StatusBadGateway), lat,
-				map[string]string{"upstream": proxyURLHost(proxy)}, started, pepMode, "forwarded")
+				map[string]string{"upstream": proxyURLHost(proxy)}, decision.Decision, "ok", "", started, pepMode, "forwarded")
 			http.Error(rw, "upstream error", http.StatusBadGateway)
 		}
 
@@ -334,7 +371,7 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 }
 
 func writeInvocationReceipt(ctx context.Context, logger *slog.Logger, store invocationStore, tenant uuid.UUID, decisionID *uuid.UUID, requestID string,
-	toolName, method, path, policyHash string, policyVersion int, outcome string, statusCode *int, latencyMs int, meta map[string]string, started time.Time, pepMode, enforcement string) {
+	toolName, method, path, policyHash string, policyVersion int, outcome string, statusCode *int, latencyMs int, meta map[string]string, decisionResult, pdpStatus, pdpErrorCode string, started time.Time, pepMode, enforcement string) {
 
 	if store == nil {
 		logger.Warn("invocation receipt skipped (no store)")
@@ -347,10 +384,13 @@ func writeInvocationReceipt(ctx context.Context, logger *slog.Logger, store invo
 		Path:          path,
 		PolicyHash:    policyHash,
 		PolicyVersion: policyVersion,
+		Decision:      decisionResult,
 		Outcome:       outcome,
 		StatusCode:    statusCode,
 		LatencyMs:     latencyMs,
 		Meta:          meta,
+		PDPStatus:     pdpStatus,
+		PDPErrorCode:  pdpErrorCode,
 		StartedAt:     started.UTC().Format(time.RFC3339),
 		RequestID:     requestID,
 		PEPMode:       pepMode,
@@ -399,6 +439,19 @@ func proxyURLHost(_ *httputil.ReverseProxy) string {
 }
 
 func intPtr(v int) *int { return &v }
+
+func classifyPDPError(err error, status int) (string, string) {
+	if err == nil {
+		return "ok", ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout", "POLICY_UNAVAILABLE"
+	}
+	if status >= 500 || status == 0 {
+		return "unavailable", "POLICY_UNAVAILABLE"
+	}
+	return "error", "POLICY_UNAVAILABLE"
+}
 
 func getenv(k, d string) string {
 	if v := strings.TrimSpace(os.Getenv(k)); v != "" {

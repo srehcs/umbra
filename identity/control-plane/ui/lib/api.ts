@@ -1,3 +1,5 @@
+import type { ListResponse, PolicyRow, Receipt, Tool } from "./types";
+
 const BASE_URL =
   process.env.NEXT_PUBLIC_CONTROLPLANE_URL?.replace(/\/$/, "") || "http://localhost:8080";
 
@@ -21,7 +23,8 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
 
 export const api = {
   // Tools
-  listTools: () => request<{ items: import("./types").Tool[] }>("/v1/tools"),
+  listTools: (signal?: AbortSignal) =>
+    request<{ items: Tool[] }>("/v1/tools", { signal }),
   createTool: (body: { name: string; endpoint: string }) =>
     request<{ id: string }>("/v1/tools", {
       method: "POST",
@@ -32,7 +35,8 @@ export const api = {
     request<{ ok: true }>(`/v1/tools/${id}/activate`, { method: "POST" }),
 
   // Policies
-  listPolicies: () => request<{ items: import("./types").PolicyRow[] }>("/v1/policies"),
+  listPolicies: (signal?: AbortSignal) =>
+    request<{ items: PolicyRow[] }>("/v1/policies", { signal }),
   createPolicy: (body: { name: string; policy: unknown }) =>
     request<{ id: string }>("/v1/policies", {
       method: "POST",
@@ -53,12 +57,15 @@ export const api = {
     ),
 
   // Receipts
-  listReceipts: (params: { limit?: number; kind?: string; q?: string; before?: string } = {}) => {
+  listReceipts: (
+    params: { limit?: number; kind?: string; q?: string; before?: string } = {},
+    signal?: AbortSignal,
+  ) => {
     const sp = new URLSearchParams();
     sp.set("limit", String(params.limit ?? 100));
     if (params.kind) sp.set("kind", params.kind);
     if (params.q) sp.set("q", params.q);
     if (params.before) sp.set("before", params.before);
-    return request<import("./types").ListResponse<import("./types").Receipt>>(`/v1/receipts?${sp.toString()}`);
+    return request<ListResponse<Receipt>>(`/v1/receipts?${sp.toString()}`, { signal });
   },
 };

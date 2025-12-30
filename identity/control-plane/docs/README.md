@@ -25,6 +25,7 @@
 ## Runbooks and examples
 - `runbooks/`
 - `examples/`
+- `runbooks/pdp_unavailable.md`
 
 ## Receipts integrity
 - `receipts_integrity.md`

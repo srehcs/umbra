@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"log/slog"
 	"net/http"
@@ -88,9 +89,106 @@ func TestPolicyLifecycle_ActivateUpdatesActive(t *testing.T) {
 	}
 }
 
+func TestReceiptExportFiltersAndSafety(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("UMBRA_TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("UMBRA_TEST_DATABASE_URL not set")
+	}
+
+	ctx := context.Background()
+	db, err := stor.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("db connect failed: %v", err)
+	}
+	defer db.Close()
+
+	if err := applyMigrations(t, db.Pool); err != nil {
+		t.Fatalf("migrations failed: %v", err)
+	}
+	if _, err := db.Pool.Exec(ctx, `TRUNCATE receipts_decision, receipts_invocation, policies, tools, tenants RESTART IDENTITY CASCADE`); err != nil {
+		t.Fatalf("truncate failed: %v", err)
+	}
+
+	tenantID := createTenant(t, db.Pool, "export-tenant")
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	server := &Server{Logger: logger, Store: storage.New(db)}
+
+	now := time.Now().UTC()
+	tsAllow := now.Add(-30 * time.Minute)
+	tsDeny := now.Add(-2 * time.Hour)
+
+	decisionAllowID := uuid.New()
+	decisionDenyID := uuid.New()
+
+	_, err = db.Pool.Exec(ctx, `
+    INSERT INTO receipts_decision(tenant_id, ts, decision_id, policy_hash, decision, body_json, prev_hash, hash, trace_id, span_id, request_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		tenantID, tsAllow, decisionAllowID, "policy-hash-allow", "allow",
+		json.RawMessage(`{"actor":{"id":"user-1"},"tool":{"name":"tool.alpha"},"policy_version":1,"secret":"dont-export"}`),
+		nil, "hash-allow", "trace-allow", "span-allow", "req-allow",
+	)
+	if err != nil {
+		t.Fatalf("insert allow decision receipt failed: %v", err)
+	}
+	_, err = db.Pool.Exec(ctx, `
+    INSERT INTO receipts_decision(tenant_id, ts, decision_id, policy_hash, decision, body_json, prev_hash, hash, trace_id, span_id, request_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		tenantID, tsDeny, decisionDenyID, "policy-hash-deny", "deny",
+		json.RawMessage(`{"actor":{"id":"user-2"},"tool":{"name":"tool.beta"},"policy_version":1,"secret":"dont-export"}`),
+		"prev-hash", "hash-deny", "trace-deny", "span-deny", "req-deny",
+	)
+	if err != nil {
+		t.Fatalf("insert deny decision receipt failed: %v", err)
+	}
+
+	_, err = db.Pool.Exec(ctx, `
+    INSERT INTO receipts_invocation(tenant_id, ts, decision_id, tool_name, method, path, outcome, status_code, latency_ms, body_json, prev_hash, hash, trace_id, span_id, request_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+		tenantID, tsAllow, decisionAllowID, "tool.alpha", "GET", "/demo", "error", 502, 42,
+		json.RawMessage(`{"policy_hash":"policy-hash-allow","policy_version":1,"secret":"dont-export"}`),
+		nil, "hash-inv", "trace-inv", "span-inv", "req-allow",
+	)
+	if err != nil {
+		t.Fatalf("insert invocation receipt failed: %v", err)
+	}
+
+	from := tsAllow.Add(-10 * time.Minute).Format(time.RFC3339)
+	to := tsAllow.Add(10 * time.Minute).Format(time.RFC3339)
+	req := httptest.NewRequest("GET", "/v1/receipts/export?format=json&decision=allow&from="+from+"&to="+to, nil)
+	req.Header.Set("x-umbra-tenant-id", tenantID.String())
+	w := httptest.NewRecorder()
+	server.handleReceiptsExport(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("export failed: %d %s", w.Code, w.Body.String())
+	}
+
+	body := w.Body.String()
+	if strings.Contains(body, "dont-export") {
+		t.Fatalf("export should not include secret payloads")
+	}
+
+	var out struct {
+		SchemaVersion string                   `json:"schema_version"`
+		Items         []map[string]interface{} `json:"items"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("parse export response failed: %v", err)
+	}
+	if out.SchemaVersion == "" {
+		t.Fatalf("expected schema_version")
+	}
+	if len(out.Items) != 1 {
+		t.Fatalf("expected 1 receipt in export, got %d", len(out.Items))
+	}
+	if out.Items[0]["decision"] != "allow" {
+		t.Fatalf("expected decision allow, got %v", out.Items[0]["decision"])
+	}
+}
+
 func applyMigrations(t *testing.T, pool *pgxpool.Pool) error {
 	t.Helper()
-	sqlFiles := []string{"0001_init.sql", "0002_add_request_id.sql"}
+	sqlFiles := []string{"0001_init.sql", "0002_add_request_id.sql", "0003_add_receipt_indexes.sql", "0004_add_receipt_search_indexes.sql", "0005_add_receipt_search_text.sql"}
 	for _, name := range sqlFiles {
 		content, err := os.ReadFile(migrationPath(t, name))
 		if err != nil {

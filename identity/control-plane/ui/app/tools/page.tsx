@@ -24,20 +24,25 @@ export default function ToolsPage() {
   const [kind, setKind] = React.useState("http");
   const [config, setConfig] = React.useState(JSON.stringify({ upstream: "http://upstream-sample:9000" }, null, 2));
 
-  async function refresh() {
+  async function refresh(signal?: AbortSignal) {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.listTools();
+      const data = await api.listTools(signal);
       setItems(data.items ?? []);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : \"Failed to load tools\");
+      if (signal?.aborted) return;
+      setError(e instanceof Error ? e.message : "Failed to load tools");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }
 
-  React.useEffect(() => { refresh(); }, []);
+  React.useEffect(() => {
+    const controller = new AbortController();
+    refresh(controller.signal);
+    return () => controller.abort();
+  }, []);
 
   async function create() {
     setError(null);
@@ -47,7 +52,7 @@ export default function ToolsPage() {
       await api.createTool({ name, kind, config: parsed });
       await refresh();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : \"Create failed\");
+      setError(e instanceof Error ? e.message : "Create failed");
     }
   }
 

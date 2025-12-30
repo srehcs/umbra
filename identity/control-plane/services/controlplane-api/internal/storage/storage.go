@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
+	"io"
 	"strings"
 	"time"
 
@@ -174,6 +176,37 @@ type Receipt struct {
 	Data json.RawMessage `json:"data"`
 }
 
+type ExportFilters struct {
+	From       *time.Time
+	To         *time.Time
+	ActorID    string
+	Tool       string
+	Decision   string
+	RequestID  string
+	DecisionID string
+	Limit      int
+}
+
+type ExportRecord struct {
+	SchemaVersion   string    `json:"schema_version"`
+	Kind            string    `json:"kind"`
+	TS              time.Time `json:"ts"`
+	RequestID       string    `json:"request_id,omitempty"`
+	DecisionID      string    `json:"decision_id,omitempty"`
+	TraceID         string    `json:"trace_id,omitempty"`
+	PolicyHash      string    `json:"policy_hash,omitempty"`
+	PolicyVersion   *int      `json:"policy_version,omitempty"`
+	Decision        string    `json:"decision,omitempty"`
+	ActorID         string    `json:"actor_id,omitempty"`
+	ToolName        string    `json:"tool_name,omitempty"`
+	Method          string    `json:"method,omitempty"`
+	Path            string    `json:"path,omitempty"`
+	Outcome         string    `json:"outcome,omitempty"`
+	StatusCode      *int      `json:"status_code,omitempty"`
+	ReceiptHash     string    `json:"receipt_hash"`
+	ReceiptPrevHash string    `json:"receipt_prev_hash,omitempty"`
+}
+
 func (s *Store) ListReceiptChain(ctx context.Context, tenant uuid.UUID, limit int, kind string) ([]receipts.ChainRecord, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
@@ -196,21 +229,125 @@ func (s *Store) ListReceipts(ctx context.Context, tenant uuid.UUID, limit int, k
 	kind = strings.ToLower(strings.TrimSpace(kind))
 	q = strings.ToLower(strings.TrimSpace(q))
 
-	// where clause helpers
-	beforeClause := ""
-	argsD := []interface{}{tenant, limit}
-	argsI := []interface{}{tenant, limit}
-	if before != nil {
-		beforeClause = " AND ts < $3 "
-		argsD = []interface{}{tenant, limit, *before}
-		argsI = []interface{}{tenant, limit, *before}
+	if kind == "" || kind == "all" {
+		return s.listReceiptsUnion(ctx, tenant, limit, q, before)
+	}
+	if kind == "decision" {
+		return s.listReceiptsDecision(ctx, tenant, limit, q, before)
+	}
+	if kind == "invocation" {
+		return s.listReceiptsInvocation(ctx, tenant, limit, q, before)
 	}
 
-	// Decision receipts query (filter q over a few fields; V0 pragmatic)
-	dsql := `
+	return []json.RawMessage{}, nil, nil
+}
+
+func (s *Store) listReceiptsUnion(ctx context.Context, tenant uuid.UUID, limit int, q string, before *time.Time) ([]json.RawMessage, *time.Time, error) {
+	args := []interface{}{tenant}
+	idx := 2
+	whereDecision := " WHERE tenant_id=$1"
+	whereInvocation := " WHERE tenant_id=$1"
+	if before != nil {
+		whereDecision += " AND ts < $" + itoa(idx)
+		whereInvocation += " AND ts < $" + itoa(idx)
+		args = append(args, *before)
+		idx++
+	}
+
+	query := `
+    SELECT ts, obj, request_id, decision_id, trace_id, receipt_hash, receipt_prev_hash, search_text FROM (
+      SELECT ts, jsonb_build_object(
+        'kind','decision',
+        'id', id,
+        'ts', ts,
+        'decision_id', decision_id,
+        'request_id', request_id,
+        'policy_hash', policy_hash,
+        'decision', decision,
+        'hash', hash,
+        'prev_hash', prev_hash,
+        'trace_id', trace_id,
+        'span_id', span_id
+      ) AS obj,
+      request_id,
+      decision_id::text AS decision_id,
+      trace_id,
+      hash AS receipt_hash,
+      prev_hash AS receipt_prev_hash,
+      search_text
+      FROM receipts_decision` + whereDecision + `
+      UNION ALL
+      SELECT ts, jsonb_build_object(
+        'kind','invocation',
+        'id', id,
+        'ts', ts,
+        'decision_id', decision_id,
+        'request_id', request_id,
+        'tool_name', tool_name,
+        'method', method,
+        'path', path,
+        'outcome', outcome,
+        'status_code', status_code,
+        'latency_ms', latency_ms,
+        'policy_hash', body_json->>'policy_hash',
+        'policy_version', (body_json->>'policy_version')::int,
+        'hash', hash,
+        'prev_hash', prev_hash,
+        'trace_id', trace_id,
+        'span_id', span_id
+      ) AS obj,
+      request_id,
+      decision_id::text AS decision_id,
+      trace_id,
+      hash AS receipt_hash,
+      prev_hash AS receipt_prev_hash,
+      search_text
+      FROM receipts_invocation` + whereInvocation + `
+    ) AS merged`
+
+	if q != "" {
+		clause, clauseArgs, next := buildReceiptSearchClause(q, idx)
+		query += clause
+		args = append(args, clauseArgs...)
+		idx = next
+	}
+
+	query += " ORDER BY ts DESC LIMIT $" + itoa(idx)
+	args = append(args, limit)
+
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	items := []json.RawMessage{}
+	var next *time.Time
+	for rows.Next() {
+		var ts time.Time
+		var obj []byte
+		var requestID, decisionID, traceID, receiptHash string
+		var receiptPrevHash *string
+		var searchText *string
+		if err := rows.Scan(&ts, &obj, &requestID, &decisionID, &traceID, &receiptHash, &receiptPrevHash, &searchText); err != nil {
+			return nil, nil, err
+		}
+		items = append(items, obj)
+		next = &ts
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return items, next, nil
+}
+
+func (s *Store) listReceiptsDecision(ctx context.Context, tenant uuid.UUID, limit int, q string, before *time.Time) ([]json.RawMessage, *time.Time, error) {
+	where, args := buildReceiptWhere(tenant, "receipts_decision", q, before, limit)
+	query := `
     SELECT ts, jsonb_build_object(
       'kind','decision',
       'id', id,
+      'ts', ts,
       'decision_id', decision_id,
       'request_id', request_id,
       'policy_hash', policy_hash,
@@ -220,16 +357,20 @@ func (s *Store) ListReceipts(ctx context.Context, tenant uuid.UUID, limit int, k
       'trace_id', trace_id,
       'span_id', span_id
     ) AS obj
-    FROM receipts_decision
-    WHERE tenant_id=$1` + beforeClause + `
+    FROM receipts_decision` + where + `
     ORDER BY ts DESC
-    LIMIT $2`
+    LIMIT $` + itoa(len(args))
 
-	// Invocation receipts query
-	isql := `
+	return s.listReceiptRows(ctx, query, args)
+}
+
+func (s *Store) listReceiptsInvocation(ctx context.Context, tenant uuid.UUID, limit int, q string, before *time.Time) ([]json.RawMessage, *time.Time, error) {
+	where, args := buildReceiptWhere(tenant, "receipts_invocation", q, before, limit)
+	query := `
     SELECT ts, jsonb_build_object(
       'kind','invocation',
       'id', id,
+      'ts', ts,
       'decision_id', decision_id,
       'request_id', request_id,
       'tool_name', tool_name,
@@ -245,101 +386,608 @@ func (s *Store) ListReceipts(ctx context.Context, tenant uuid.UUID, limit int, k
       'trace_id', trace_id,
       'span_id', span_id
     ) AS obj
-    FROM receipts_invocation
-    WHERE tenant_id=$1` + beforeClause + `
+    FROM receipts_invocation` + where + `
     ORDER BY ts DESC
-    LIMIT $2`
+    LIMIT $` + itoa(len(args))
 
-	out := []map[string]interface{}{}
-	// Decisions
-	if kind == "" || kind == "decision" || kind == "all" {
-		drows, err := s.db.Query(ctx, dsql, argsD...)
-		if err != nil {
-			return nil, nil, err
-		}
-		defer drows.Close()
-		for drows.Next() {
-			var ts time.Time
-			var obj []byte
-			if err := drows.Scan(&ts, &obj); err != nil {
-				return nil, nil, err
-			}
-			var m map[string]interface{}
-			_ = json.Unmarshal(obj, &m)
-			m["ts"] = ts
-			out = append(out, m)
-		}
-		if err := drows.Err(); err != nil {
-			return nil, nil, err
-		}
+	return s.listReceiptRows(ctx, query, args)
+}
+
+func (s *Store) listReceiptRows(ctx context.Context, query string, args []interface{}) ([]json.RawMessage, *time.Time, error) {
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, nil, err
 	}
+	defer rows.Close()
 
-	// Invocations
-	if kind == "" || kind == "invocation" || kind == "all" {
-		irows, err := s.db.Query(ctx, isql, argsI...)
-		if err != nil {
-			return nil, nil, err
-		}
-		defer irows.Close()
-		for irows.Next() {
-			var ts time.Time
-			var obj []byte
-			if err := irows.Scan(&ts, &obj); err != nil {
-				return nil, nil, err
-			}
-			var m map[string]interface{}
-			_ = json.Unmarshal(obj, &m)
-			m["ts"] = ts
-			out = append(out, m)
-		}
-		if err := irows.Err(); err != nil {
-			return nil, nil, err
-		}
-	}
-
-	// Sort merged by ts desc (V0)
-	for i := 0; i < len(out); i++ {
-		for j := i + 1; j < len(out); j++ {
-			ti, _ := out[i]["ts"].(time.Time)
-			tj, _ := out[j]["ts"].(time.Time)
-			if tj.After(ti) {
-				out[i], out[j] = out[j], out[i]
-			}
-		}
-	}
-
-	// Apply q filtering post-merge (simple, safe). Server-side enough for V0.
-	if q != "" {
-		filtered := []map[string]interface{}{}
-		for _, r := range out {
-			b, _ := json.Marshal(r)
-			if strings.Contains(strings.ToLower(string(b)), q) {
-				filtered = append(filtered, r)
-			}
-		}
-		out = filtered
-	}
-
-	if len(out) > limit {
-		out = out[:limit]
-	}
-
-	// next_before: oldest ts in page
+	items := []json.RawMessage{}
 	var next *time.Time
-	if len(out) > 0 {
-		t, _ := out[len(out)-1]["ts"].(time.Time)
-		next = &t
-	}
-
-	items := make([]json.RawMessage, 0, len(out))
-	for _, r := range out {
-		b, err := json.Marshal(r)
-		if err != nil {
+	for rows.Next() {
+		var ts time.Time
+		var obj []byte
+		if err := rows.Scan(&ts, &obj); err != nil {
 			return nil, nil, err
 		}
-		items = append(items, b)
+		items = append(items, obj)
+		next = &ts
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
 	}
 	return items, next, nil
+}
+
+func buildReceiptWhere(tenant uuid.UUID, table string, q string, before *time.Time, limit int) (string, []interface{}) {
+	args := []interface{}{tenant}
+	idx := 2
+	where := " WHERE tenant_id=$1"
+	if before != nil {
+		where += " AND ts < $" + itoa(idx)
+		args = append(args, *before)
+		idx++
+	}
+	if q != "" {
+		if isUUID(q) {
+			where += " AND (request_id = $" + itoa(idx) + " OR decision_id::text = $" + itoa(idx) + " OR trace_id = $" + itoa(idx) + ")"
+			args = append(args, q)
+			idx++
+		} else if isHash(q) {
+			where += " AND (hash = $" + itoa(idx) + " OR prev_hash = $" + itoa(idx) + ")"
+			args = append(args, q)
+			idx++
+		} else {
+			where += " AND search_text ILIKE $" + itoa(idx)
+			args = append(args, "%"+q+"%")
+			idx++
+		}
+	}
+	args = append(args, limit)
+	return where, args
+}
+
+func buildReceiptSearchClause(q string, start int) (string, []interface{}, int) {
+	if q == "" {
+		return "", nil, start
+	}
+	if isUUID(q) {
+		return " WHERE (request_id = $" + itoa(start) + " OR decision_id = $" + itoa(start) + " OR trace_id = $" + itoa(start) + ")",
+			[]interface{}{q}, start + 1
+	}
+	if isHash(q) {
+		return " WHERE (receipt_hash = $" + itoa(start) + " OR receipt_prev_hash = $" + itoa(start) + ")",
+			[]interface{}{q}, start + 1
+	}
+	return " WHERE search_text ILIKE $" + itoa(start),
+		[]interface{}{"%" + q + "%"}, start + 1
+}
+
+func isUUID(s string) bool {
+	_, err := uuid.Parse(s)
+	return err == nil
+}
+
+func isHash(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		switch {
+		case c >= '0' && c <= '9':
+		case c >= 'a' && c <= 'f':
+		case c >= 'A' && c <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Store) ExportReceiptsCSV(ctx context.Context, tenant uuid.UUID, f ExportFilters, w io.Writer) error {
+	writer := csv.NewWriter(w)
+	WriteReceiptsCSVHeader(writer)
+
+	if f.ActorID != "" {
+		decisions, err := s.exportDecisionReceipts(ctx, tenant, f)
+		if err != nil {
+			return err
+		}
+		for _, record := range decisions {
+			WriteReceiptsCSVRecord(writer, record)
+		}
+		writer.Flush()
+		return writer.Error()
+	}
+
+	rows, err := s.exportReceiptsUnionRows(ctx, tenant, f)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		record, err := scanExportUnionRow(rows)
+		if err != nil {
+			return err
+		}
+		WriteReceiptsCSVRecord(writer, record)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	writer.Flush()
+	return writer.Error()
+}
+
+func (s *Store) ExportReceipts(ctx context.Context, tenant uuid.UUID, f ExportFilters) ([]ExportRecord, error) {
+	if f.Limit <= 0 || f.Limit > 500 {
+		f.Limit = 100
+	}
+	f.ActorID = strings.TrimSpace(f.ActorID)
+	f.Tool = strings.TrimSpace(f.Tool)
+	f.Decision = strings.ToLower(strings.TrimSpace(f.Decision))
+	f.RequestID = strings.TrimSpace(f.RequestID)
+	f.DecisionID = strings.TrimSpace(f.DecisionID)
+
+	if f.ActorID != "" {
+		decisions, err := s.exportDecisionReceipts(ctx, tenant, f)
+		if err != nil {
+			return nil, err
+		}
+		return trimExport(decisions, f.Limit), nil
+	}
+
+	return s.exportReceiptsUnion(ctx, tenant, f)
+}
+
+func (s *Store) exportDecisionReceipts(ctx context.Context, tenant uuid.UUID, f ExportFilters) ([]ExportRecord, error) {
+	args := []interface{}{tenant}
+	idx := 2
+	where := " WHERE tenant_id=$1 "
+	if f.From != nil {
+		where += " AND ts >= $" + itoa(idx)
+		args = append(args, *f.From)
+		idx++
+	}
+	if f.To != nil {
+		where += " AND ts <= $" + itoa(idx)
+		args = append(args, *f.To)
+		idx++
+	}
+	if f.ActorID != "" {
+		where += " AND body_json->'actor'->>'id' = $" + itoa(idx)
+		args = append(args, f.ActorID)
+		idx++
+	}
+	if f.Tool != "" {
+		where += " AND body_json->'tool'->>'name' = $" + itoa(idx)
+		args = append(args, f.Tool)
+		idx++
+	}
+	if f.Decision != "" {
+		where += " AND decision = $" + itoa(idx)
+		args = append(args, f.Decision)
+		idx++
+	}
+	if f.RequestID != "" {
+		where += " AND request_id = $" + itoa(idx)
+		args = append(args, f.RequestID)
+		idx++
+	}
+	if f.DecisionID != "" {
+		where += " AND decision_id = $" + itoa(idx)
+		args = append(args, f.DecisionID)
+		idx++
+	}
+
+	args = append(args, f.Limit)
+	sql := `
+    SELECT ts, decision_id, request_id, trace_id, policy_hash, decision, hash, prev_hash,
+      body_json->'actor'->>'id' AS actor_id,
+      body_json->'tool'->>'name' AS tool_name,
+      NULLIF(body_json->>'policy_version','')::int AS policy_version
+    FROM receipts_decision` + where + `
+    ORDER BY ts DESC
+    LIMIT $` + itoa(idx)
+
+	rows, err := s.db.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []ExportRecord{}
+	for rows.Next() {
+		var ts time.Time
+		var decisionID, requestID, traceID, policyHash, decision string
+		var hash string
+		var prev *string
+		var actorID, toolName *string
+		var policyVersion *int
+		if err := rows.Scan(&ts, &decisionID, &requestID, &traceID, &policyHash, &decision, &hash, &prev, &actorID, &toolName, &policyVersion); err != nil {
+			return nil, err
+		}
+		record := ExportRecord{
+			SchemaVersion:   "v1",
+			Kind:            "decision",
+			TS:              ts,
+			RequestID:       requestID,
+			DecisionID:      decisionID,
+			TraceID:         traceID,
+			PolicyHash:      policyHash,
+			PolicyVersion:   policyVersion,
+			Decision:        decision,
+			ReceiptHash:     hash,
+			ReceiptPrevHash: derefString(prev),
+		}
+		if actorID != nil {
+			record.ActorID = *actorID
+		}
+		if toolName != nil {
+			record.ToolName = *toolName
+		}
+		out = append(out, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) exportInvocationReceipts(ctx context.Context, tenant uuid.UUID, f ExportFilters) ([]ExportRecord, error) {
+	args := []interface{}{tenant}
+	idx := 2
+	where := " WHERE tenant_id=$1 "
+	if f.From != nil {
+		where += " AND ts >= $" + itoa(idx)
+		args = append(args, *f.From)
+		idx++
+	}
+	if f.To != nil {
+		where += " AND ts <= $" + itoa(idx)
+		args = append(args, *f.To)
+		idx++
+	}
+	if f.Tool != "" {
+		where += " AND tool_name = $" + itoa(idx)
+		args = append(args, f.Tool)
+		idx++
+	}
+	if f.RequestID != "" {
+		where += " AND request_id = $" + itoa(idx)
+		args = append(args, f.RequestID)
+		idx++
+	}
+	if f.DecisionID != "" {
+		where += " AND decision_id = $" + itoa(idx)
+		args = append(args, f.DecisionID)
+		idx++
+	}
+	if f.Decision != "" {
+		outcome := ""
+		switch f.Decision {
+		case "allow":
+			outcome = "success"
+		case "deny":
+			outcome = "denied"
+		default:
+			outcome = ""
+		}
+		if outcome != "" {
+			where += " AND outcome = $" + itoa(idx)
+			args = append(args, outcome)
+			idx++
+		}
+	}
+
+	args = append(args, f.Limit)
+	sql := `
+    SELECT ts, decision_id, request_id, trace_id, tool_name, method, path, outcome, status_code, hash, prev_hash,
+      body_json->>'policy_hash' AS policy_hash,
+      NULLIF(body_json->>'policy_version','')::int AS policy_version
+    FROM receipts_invocation` + where + `
+    ORDER BY ts DESC
+    LIMIT $` + itoa(idx)
+
+	rows, err := s.db.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []ExportRecord{}
+	for rows.Next() {
+		var ts time.Time
+		var decisionID *string
+		var requestID, traceID, toolName, method, path, outcome string
+		var statusCode *int
+		var hash string
+		var prev *string
+		var policyHash *string
+		var policyVersion *int
+		if err := rows.Scan(&ts, &decisionID, &requestID, &traceID, &toolName, &method, &path, &outcome, &statusCode, &hash, &prev, &policyHash, &policyVersion); err != nil {
+			return nil, err
+		}
+		record := ExportRecord{
+			SchemaVersion:   "v1",
+			Kind:            "invocation",
+			TS:              ts,
+			RequestID:       requestID,
+			TraceID:         traceID,
+			ToolName:        toolName,
+			Method:          method,
+			Path:            path,
+			Outcome:         outcome,
+			StatusCode:      statusCode,
+			PolicyVersion:   policyVersion,
+			ReceiptHash:     hash,
+			ReceiptPrevHash: derefString(prev),
+		}
+		if decisionID != nil {
+			record.DecisionID = *decisionID
+		}
+		if policyHash != nil {
+			record.PolicyHash = *policyHash
+		}
+		out = append(out, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) exportReceiptsUnion(ctx context.Context, tenant uuid.UUID, f ExportFilters) ([]ExportRecord, error) {
+	rows, err := s.exportReceiptsUnionRows(ctx, tenant, f)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []ExportRecord{}
+	for rows.Next() {
+		record, err := scanExportUnionRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) exportReceiptsUnionRows(ctx context.Context, tenant uuid.UUID, f ExportFilters) (pgx.Rows, error) {
+	sql, args := buildExportUnionQuery(tenant, f)
+	return s.db.Query(ctx, sql, args...)
+}
+
+func buildExportUnionQuery(tenant uuid.UUID, f ExportFilters) (string, []interface{}) {
+	decisionWhere, decisionArgs, nextIdx := buildDecisionWhere(tenant, 1, f)
+	invWhere, invArgs, nextIdx := buildInvocationWhere(tenant, nextIdx, f)
+
+	decisionSQL := `
+    SELECT
+      'v1' AS schema_version,
+      'decision' AS kind,
+      ts,
+      request_id,
+      decision_id::text,
+      trace_id,
+      policy_hash,
+      NULLIF(body_json->>'policy_version','')::int AS policy_version,
+      decision,
+      body_json->'actor'->>'id' AS actor_id,
+      body_json->'tool'->>'name' AS tool_name,
+      NULL::text AS method,
+      NULL::text AS path,
+      NULL::text AS outcome,
+      NULL::int AS status_code,
+      hash AS receipt_hash,
+      prev_hash AS receipt_prev_hash
+    FROM receipts_decision` + decisionWhere
+
+	invSQL := `
+    SELECT
+      'v1' AS schema_version,
+      'invocation' AS kind,
+      ts,
+      request_id,
+      decision_id::text,
+      trace_id,
+      body_json->>'policy_hash' AS policy_hash,
+      NULLIF(body_json->>'policy_version','')::int AS policy_version,
+      NULL::text AS decision,
+      NULL::text AS actor_id,
+      tool_name,
+      method,
+      path,
+      outcome,
+      status_code,
+      hash AS receipt_hash,
+      prev_hash AS receipt_prev_hash
+    FROM receipts_invocation` + invWhere
+
+	args := append(decisionArgs, invArgs...)
+	args = append(args, f.Limit)
+	sql := decisionSQL + " UNION ALL " + invSQL + " ORDER BY ts DESC LIMIT $" + itoa(nextIdx)
+	return sql, args
+}
+
+func scanExportUnionRow(rows pgx.Rows) (ExportRecord, error) {
+	var schemaVersion, kind string
+	var ts time.Time
+	var requestID string
+	var decisionID *string
+	var traceID string
+	var policyHash *string
+	var policyVersion *int
+	var decision *string
+	var actorID *string
+	var toolName *string
+	var method *string
+	var path *string
+	var outcome *string
+	var statusCode *int
+	var receiptHash string
+	var receiptPrevHash *string
+
+	if err := rows.Scan(
+		&schemaVersion,
+		&kind,
+		&ts,
+		&requestID,
+		&decisionID,
+		&traceID,
+		&policyHash,
+		&policyVersion,
+		&decision,
+		&actorID,
+		&toolName,
+		&method,
+		&path,
+		&outcome,
+		&statusCode,
+		&receiptHash,
+		&receiptPrevHash,
+	); err != nil {
+		return ExportRecord{}, err
+	}
+
+	record := ExportRecord{
+		SchemaVersion:   schemaVersion,
+		Kind:            kind,
+		TS:              ts,
+		RequestID:       requestID,
+		TraceID:         traceID,
+		PolicyVersion:   policyVersion,
+		ReceiptHash:     receiptHash,
+		ReceiptPrevHash: derefString(receiptPrevHash),
+	}
+	if decisionID != nil {
+		record.DecisionID = *decisionID
+	}
+	if policyHash != nil {
+		record.PolicyHash = *policyHash
+	}
+	if decision != nil {
+		record.Decision = *decision
+	}
+	if actorID != nil {
+		record.ActorID = *actorID
+	}
+	if toolName != nil {
+		record.ToolName = *toolName
+	}
+	if method != nil {
+		record.Method = *method
+	}
+	if path != nil {
+		record.Path = *path
+	}
+	if outcome != nil {
+		record.Outcome = *outcome
+	}
+	record.StatusCode = statusCode
+
+	return record, nil
+}
+
+func buildDecisionWhere(tenant uuid.UUID, start int, f ExportFilters) (string, []interface{}, int) {
+	args := []interface{}{tenant}
+	idx := start + 1
+	where := " WHERE tenant_id=$" + itoa(start)
+	if f.From != nil {
+		where += " AND ts >= $" + itoa(idx)
+		args = append(args, *f.From)
+		idx++
+	}
+	if f.To != nil {
+		where += " AND ts <= $" + itoa(idx)
+		args = append(args, *f.To)
+		idx++
+	}
+	if f.Tool != "" {
+		where += " AND body_json->'tool'->>'name' = $" + itoa(idx)
+		args = append(args, f.Tool)
+		idx++
+	}
+	if f.Decision != "" {
+		where += " AND decision = $" + itoa(idx)
+		args = append(args, f.Decision)
+		idx++
+	}
+	if f.RequestID != "" {
+		where += " AND request_id = $" + itoa(idx)
+		args = append(args, f.RequestID)
+		idx++
+	}
+	if f.DecisionID != "" {
+		where += " AND decision_id = $" + itoa(idx)
+		args = append(args, f.DecisionID)
+		idx++
+	}
+	return where, args, idx
+}
+
+func buildInvocationWhere(tenant uuid.UUID, start int, f ExportFilters) (string, []interface{}, int) {
+	args := []interface{}{tenant}
+	idx := start + 1
+	where := " WHERE tenant_id=$" + itoa(start)
+	if f.From != nil {
+		where += " AND ts >= $" + itoa(idx)
+		args = append(args, *f.From)
+		idx++
+	}
+	if f.To != nil {
+		where += " AND ts <= $" + itoa(idx)
+		args = append(args, *f.To)
+		idx++
+	}
+	if f.Tool != "" {
+		where += " AND tool_name = $" + itoa(idx)
+		args = append(args, f.Tool)
+		idx++
+	}
+	if f.RequestID != "" {
+		where += " AND request_id = $" + itoa(idx)
+		args = append(args, f.RequestID)
+		idx++
+	}
+	if f.DecisionID != "" {
+		where += " AND decision_id::text = $" + itoa(idx)
+		args = append(args, f.DecisionID)
+		idx++
+	}
+	if f.Decision != "" {
+		outcome := ""
+		switch f.Decision {
+		case "allow":
+			outcome = "success"
+		case "deny":
+			outcome = "denied"
+		}
+		if outcome != "" {
+			where += " AND outcome = $" + itoa(idx)
+			args = append(args, outcome)
+			idx++
+		}
+	}
+	return where, args, idx
+}
+
+func trimExport(items []ExportRecord, limit int) []ExportRecord {
+	if len(items) > limit {
+		return items[:limit]
+	}
+	return items
+}
+
+func derefString(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }
 
 func (s *Store) listReceiptChain(ctx context.Context, tenant uuid.UUID, limit int, table string) ([]receipts.ChainRecord, error) {

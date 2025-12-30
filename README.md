@@ -48,6 +48,7 @@ Then open:
 
 Demo guide:
 - `identity/control-plane/docs/runbooks/demo.md`
+- PDP unavailable runbook: `identity/control-plane/docs/runbooks/pdp_unavailable.md`
 
 ---
 
