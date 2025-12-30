@@ -20,6 +20,10 @@ wait_for_postgres
 
 echo "[seed] Applying migrations..."
 $COMPOSE exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migrations/0001_init.sql
+$COMPOSE exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migrations/0002_add_request_id.sql
+$COMPOSE exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migrations/0003_add_receipt_indexes.sql
+$COMPOSE exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migrations/0004_add_receipt_search_indexes.sql
+$COMPOSE exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migrations/0005_add_receipt_search_text.sql
 
 echo "[seed] Seeding tenants..."
 TENANT_A=$($COMPOSE exec -T postgres psql -U umbra -d umbra -tA -c "INSERT INTO tenants(name) VALUES('TenantA') ON CONFLICT(name) DO UPDATE SET name=EXCLUDED.name RETURNING id;")

@@ -58,6 +58,10 @@ docker-build:
 
 migrate:
 	@docker compose -f deployments/docker-compose.yml exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migrations/0001_init.sql
+	@docker compose -f deployments/docker-compose.yml exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migrations/0002_add_request_id.sql
+	@docker compose -f deployments/docker-compose.yml exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migrations/0003_add_receipt_indexes.sql
+	@docker compose -f deployments/docker-compose.yml exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migrations/0004_add_receipt_search_indexes.sql
+	@docker compose -f deployments/docker-compose.yml exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migrations/0005_add_receipt_search_text.sql
 
 verify:
 	@bash scripts/dev/verify_local.sh

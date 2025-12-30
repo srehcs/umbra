@@ -99,7 +99,7 @@ func TestPDPUsesActivePolicy(t *testing.T) {
 
 func applyMigrationsPDP(t *testing.T, pool *pgxpool.Pool) error {
 	t.Helper()
-	sqlFiles := []string{"0001_init.sql", "0002_add_request_id.sql"}
+	sqlFiles := []string{"0001_init.sql", "0002_add_request_id.sql", "0003_add_receipt_indexes.sql", "0004_add_receipt_search_indexes.sql", "0005_add_receipt_search_text.sql"}
 	for _, name := range sqlFiles {
 		content, err := os.ReadFile(migrationPathPDP(t, name))
 		if err != nil {

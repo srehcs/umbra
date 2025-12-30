@@ -43,6 +43,8 @@ type PDPClient struct {
 	Client  *http.Client
 }
 
+const maxPDPResponseBytes = 1 << 20
+
 type httpError struct {
 	Status int
 	Body   string
@@ -69,7 +71,7 @@ func (c *PDPClient) Decide(ctx context.Context, payload protocol.DecisionRequest
 	}
 	defer res.Body.Close()
 
-	body, _ := io.ReadAll(res.Body)
+	body, _ := io.ReadAll(io.LimitReader(res.Body, maxPDPResponseBytes))
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return out, res.StatusCode, &httpError{Status: res.StatusCode, Body: string(body)}
 	}
@@ -468,7 +470,6 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 
 	toolLatency := 0
 	var toolStatus *int
-	var toolBody []byte
 
 	if forward {
 		forwardBody, err := buildForwardBody(req, params)
@@ -495,7 +496,6 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer toolRes.Body.Close()
-		toolBody, _ = io.ReadAll(toolRes.Body)
 		toolStatusVal := toolRes.StatusCode
 		toolStatus = &toolStatusVal
 
@@ -505,9 +505,13 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, policyHash, policyVersion, outcome, toolStatus, pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
-		w.Header().Set("content-type", "application/json")
+		if ct := toolRes.Header.Get("content-type"); ct != "" {
+			w.Header().Set("content-type", ct)
+		} else {
+			w.Header().Set("content-type", "application/json")
+		}
 		w.WriteHeader(toolRes.StatusCode)
-		_, _ = w.Write(toolBody)
+		_, _ = io.Copy(w, toolRes.Body)
 		return
 	}
 

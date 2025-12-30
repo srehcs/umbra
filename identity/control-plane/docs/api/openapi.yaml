@@ -2,6 +2,10 @@ openapi: 3.0.3
 info:
   title: Umbra Agent Identity Control Plane API
   version: 0.1.0
+  description: |
+    Contract rules:
+    - /v1/decision changes must be additive only.
+    - Breaking changes require an ADR and a new versioned endpoint (e.g. /v2/decision).
 servers:
   - url: http://localhost:8080
     description: Local Control Plane API
@@ -30,6 +34,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DecisionResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Policy evaluation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: PDP unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /v1/tools:
     get:
@@ -162,39 +184,134 @@ paths:
               schema:
                 $ref: '#/components/schemas/ReceiptList'
 
+  /v1/receipts/export:
+    get:
+      tags: [receipts]
+      summary: Export receipts (JSON or CSV)
+      operationId: exportReceipts
+      parameters:
+        - in: query
+          name: format
+          schema: { type: string, enum: [json, csv], default: json }
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+        - in: query
+          name: actor_id
+          schema: { type: string }
+        - in: query
+          name: tool
+          schema: { type: string }
+        - in: query
+          name: decision
+          schema: { type: string, enum: [allow, deny] }
+        - in: query
+          name: request_id
+          schema: { type: string }
+        - in: query
+          name: decision_id
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiptExportResponse'
+            text/csv:
+              schema:
+                type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
 components:
   schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error_code:
+          type: string
+          enum: [POLICY_DENIED, POLICY_INVALID, POLICY_UNAVAILABLE]
+        message: { type: string }
+        request_id: { type: string }
+        decision_id: { type: string }
+        trace_id: { type: string }
+      required: [error_code, message]
+
+    TenantContext:
+      type: object
+      properties:
+        tenant_id: { type: string }
+      required: [tenant_id]
+
+    Actor:
+      type: object
+      properties:
+        type: { type: string }
+        id: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+        source: { type: string }
+      required: [type, id]
+
+    ToolContext:
+      type: object
+      properties:
+        name: { type: string }
+        method: { type: string }
+        endpoint: { type: string }
+      required: [name, method, endpoint]
+
+    MCPContext:
+      type: object
+      properties:
+        server: { type: string }
+        tool: { type: string }
+        method: { type: string }
+        workspace: { type: string }
+      required: [server, tool, method]
+
+    TraceContext:
+      type: object
+      properties:
+        request_id: { type: string }
+        trace_id: { type: string }
+        span_id: { type: string }
+
     DecisionRequest:
       type: object
       properties:
         tenant:
-          type: object
-          properties:
-            tenant_id: { type: string }
-          required: [tenant_id]
+          $ref: '#/components/schemas/TenantContext'
         actor:
-          type: object
-          properties:
-            type: { type: string }
-            id: { type: string }
-            roles:
-              type: array
-              items: { type: string }
-          required: [type, id]
+          $ref: '#/components/schemas/Actor'
         tool:
-          type: object
-          properties:
-            name: { type: string }
-            method: { type: string }
-            endpoint: { type: string }
-          required: [name, method, endpoint]
+          $ref: '#/components/schemas/ToolContext'
+        mcp:
+          $ref: '#/components/schemas/MCPContext'
         trace:
-          type: object
-          properties:
-            request_id: { type: string }
-            trace_id: { type: string }
-            span_id: { type: string }
+          $ref: '#/components/schemas/TraceContext'
       required: [tenant, actor, tool]
+
+    Obligation:
+      type: object
+      properties:
+        kind: { type: string }
+        params:
+          type: object
+          additionalProperties: { type: string }
+      required: [kind]
 
     DecisionResponse:
       type: object
@@ -213,15 +330,6 @@ components:
         trace_id: { type: string }
         span_id: { type: string }
       required: [decision, decision_id]
-
-Obligation:
-  type: object
-  properties:
-    kind: { type: string }
-    params:
-      type: object
-      additionalProperties: { type: string }
-  required: [kind]
 
     Tool:
       type: object
@@ -306,3 +414,35 @@ Obligation:
         next_before:
           type: string
           format: date-time
+
+    ReceiptExportResponse:
+      type: object
+      properties:
+        schema_version: { type: string }
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReceiptExportRecord'
+      required: [schema_version, items]
+
+    ReceiptExportRecord:
+      type: object
+      properties:
+        schema_version: { type: string }
+        kind: { type: string, enum: [decision, invocation] }
+        ts: { type: string, format: date-time }
+        request_id: { type: string }
+        decision_id: { type: string }
+        trace_id: { type: string }
+        policy_hash: { type: string }
+        policy_version: { type: integer }
+        decision: { type: string, enum: [allow, deny] }
+        actor_id: { type: string }
+        tool_name: { type: string }
+        method: { type: string }
+        path: { type: string }
+        outcome: { type: string }
+        status_code: { type: integer }
+        receipt_hash: { type: string }
+        receipt_prev_hash: { type: string }
+      required: [schema_version, kind, ts, receipt_hash]
