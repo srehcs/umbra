@@ -36,12 +36,12 @@ export default function TenantSwitcher({ compact = false }: { compact?: boolean 
   };
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-col gap-2">
       {!compact && (
         <div className="flex flex-col">
           <div className="text-xs text-muted-foreground">Tenant</div>
           <div className="flex items-center gap-2">
-            <Badge variant={tenant ? "outline" : "warning"} className="truncate max-w-[160px]">
+            <Badge variant={tenant ? "outline" : "warning"} className="truncate max-w-[240px]">
               {tenant ? tenant : "not set"}
             </Badge>
           </div>
@@ -50,7 +50,7 @@ export default function TenantSwitcher({ compact = false }: { compact?: boolean 
 
       <Dialog>
         <DialogTrigger asChild>
-          <Button variant="outline" size={compact ? "sm" : "default"}>
+          <Button variant="outline" size="sm" className={compact ? "h-8" : "h-9"}>
             {compact ? "Tenant" : "Set tenant"}
           </Button>
         </DialogTrigger>
