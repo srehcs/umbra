@@ -7,10 +7,21 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Badge } from "@/components/ui/badge";
 
 const STORAGE_KEY = "umbra.tenant_id";
-
+const LEGACY_STORAGE_KEY = "umbra.tenant";
 function getInitialTenant() {
   if (typeof window === "undefined") return "";
-  return window.localStorage.getItem(STORAGE_KEY) || "";
+  if (window.localStorage.getItem(LEGACY_STORAGE_KEY)) {
+    console.warn("Legacy tenant key found; use umbra.tenant_id going forward.");
+    window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+  }
+  const existing = window.localStorage.getItem(STORAGE_KEY);
+  if (existing) return existing;
+  const seeded = process.env.NEXT_PUBLIC_TENANT_ID || "";
+  if (seeded) {
+    window.localStorage.setItem(STORAGE_KEY, seeded);
+    return seeded;
+  }
+  return "";
 }
 
 export default function TenantSwitcher({ compact = false }: { compact?: boolean }) {

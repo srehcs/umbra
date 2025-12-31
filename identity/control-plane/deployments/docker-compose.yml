@@ -129,7 +129,7 @@ services:
       context: ../ui
       dockerfile: Dockerfile
     environment:
-      NEXT_PUBLIC_CONTROLPLANE_URL: http://localhost:8080
+      CONTROLPLANE_API_URL: http://controlplane-api:8080
       NEXT_PUBLIC_TENANT_ID: ""
     ports:
       - "3000:3000"

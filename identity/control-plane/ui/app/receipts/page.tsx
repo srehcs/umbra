@@ -43,9 +43,10 @@ export default function ReceiptsPage() {
     try {
       const qValue = q.trim();
       const beforeValue = reset ? undefined : nextBefore;
+      const kindValue = kind === "all" ? undefined : kind;
       const data = await api.listReceipts({
         limit: 50,
-        kind,
+        ...(kindValue ? { kind: kindValue } : {}),
         ...(qValue ? { q: qValue } : {}),
         ...(beforeValue ? { before: beforeValue } : {}),
       }, signal);
