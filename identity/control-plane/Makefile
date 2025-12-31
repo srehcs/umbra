@@ -10,19 +10,19 @@ bootstrap:
 
 fmt:
 	@gofmt -w .
-	@cd ui && pnpm format --if-present || true
+	@cd ui && pnpm --if-present format || true
 
 lint:
 	@echo "Lint (V0): go vet + ui lint"
 	@go vet ./...
-	@cd ui && pnpm lint --if-present || true
+	@cd ui && pnpm --if-present lint || true
 
 test:
 	@go test ./...
 
 gen:
 	@echo "Generate (V0): OpenAPI → TS types (stub)"
-	@cd ui && pnpm gen --if-present || true
+	@cd ui && pnpm --if-present gen || true
 
 up:
 	$(COMPOSE) up -d --build
