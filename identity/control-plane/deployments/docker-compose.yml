@@ -23,14 +23,16 @@ services:
       - "9000:9000"
 
   mcp-upstream:
-    build: ../services/mcp-upstream
+    build:
+      context: ..
+      dockerfile: services/mcp-upstream/Dockerfile
     environment:
       PORT: "8090"
     ports:
       - "8090:8090"
 
   jaeger:
-    image: jaegertracing/all-in-one:1.61
+    image: jaegertracing/all-in-one:latest
     ports:
       - "16686:16686"
 
@@ -46,7 +48,9 @@ services:
       - jaeger
 
   controlplane-api:
-    build: ../services/controlplane-api
+    build:
+      context: ..
+      dockerfile: services/controlplane-api/Dockerfile
     environment:
       UMBRA_ENV: dev
       DATABASE_URL: postgres://umbra:umbra@postgres:5432/umbra?sslmode=disable
@@ -61,7 +65,9 @@ services:
       - otel-collector
 
   pdp:
-    build: ../services/pdp
+    build:
+      context: ..
+      dockerfile: services/pdp/Dockerfile
     environment:
       UMBRA_ENV: dev
       DATABASE_URL: postgres://umbra:umbra@postgres:5432/umbra?sslmode=disable
@@ -76,7 +82,9 @@ services:
       - otel-collector
 
   pep-gateway:
-    build: ../services/pep-gateway
+    build:
+      context: ..
+      dockerfile: services/pep-gateway/Dockerfile
     environment:
       UMBRA_ENV: dev
       PEP_MODE: observe
@@ -93,7 +101,9 @@ services:
       - upstream-sample
 
   mcp-adapter:
-    build: ../services/mcp-adapter
+    build:
+      context: ..
+      dockerfile: services/mcp-adapter/Dockerfile
     environment:
       UMBRA_ENV: dev
       PEP_MODE: observe
@@ -115,7 +125,9 @@ services:
       - mcp-upstream
 
   ui:
-    build: ../ui
+    build:
+      context: ../ui
+      dockerfile: Dockerfile
     environment:
       NEXT_PUBLIC_CONTROLPLANE_URL: http://localhost:8080
       NEXT_PUBLIC_TENANT_ID: ""

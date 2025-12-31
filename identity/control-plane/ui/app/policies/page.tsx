@@ -98,9 +98,9 @@ export default function PoliciesPage() {
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Create failed");
     }
-  }
+    }
 
-  async function activate(id: string) {
+    async function activate(id: string) {
     setError(null);
     if (!window.confirm("Activate this policy? This will deactivate any currently active policy.")) {
       return;
@@ -111,7 +111,7 @@ export default function PoliciesPage() {
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Activate failed");
     }
-  }
+    }
 
   function simulate() {
     setSimResult(null);
