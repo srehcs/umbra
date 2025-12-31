@@ -26,12 +26,8 @@ $COMPOSE exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migratio
 $COMPOSE exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migrations/0005_add_receipt_search_text.sql
 
 echo "[seed] Seeding tenants..."
-TENANT_A=$($COMPOSE exec -T postgres psql -U umbra -d umbra -tA -c "INSERT INTO tenants(name) VALUES('TenantA') ON CONFLICT(name) DO UPDATE SET name=EXCLUDED.name RETURNING id;")
-TENANT_B=$($COMPOSE exec -T postgres psql -U umbra -d umbra -tA -c "INSERT INTO tenants(name) VALUES('TenantB') ON CONFLICT(name) DO UPDATE SET name=EXCLUDED.name RETURNING id;")
-
-# Trim whitespace/newlines
-TENANT_A=$(echo "$TENANT_A" | xargs)
-TENANT_B=$(echo "$TENANT_B" | xargs)
+TENANT_A=$($COMPOSE exec -T postgres psql -U umbra -d umbra -t -c "INSERT INTO tenants(name) VALUES('TenantA') ON CONFLICT(name) DO UPDATE SET name=EXCLUDED.name RETURNING id;" 2>&1 | grep -oE '[0-9a-f-]{36}' | head -1)
+TENANT_B=$($COMPOSE exec -T postgres psql -U umbra -d umbra -t -c "INSERT INTO tenants(name) VALUES('TenantB') ON CONFLICT(name) DO UPDATE SET name=EXCLUDED.name RETURNING id;" 2>&1 | grep -oE '[0-9a-f-]{36}' | head -1)
 
 if [[ -z "$TENANT_A" || -z "$TENANT_B" ]]; then
   echo "[seed] Failed to compute tenant ids"
@@ -42,13 +38,13 @@ echo "[seed] TenantA=$TENANT_A"
 echo "[seed] TenantB=$TENANT_B"
 
 echo "[seed] Seeding tools..."
-$COMPOSE exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -c "
+cat <<PSQL | $COMPOSE exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1
   INSERT INTO tools(tenant_id, name, kind, config_json)
   VALUES
     ('$TENANT_A', 'sample-http-tool', 'http', '{"upstream":"http://upstream-sample:9000"}'::jsonb),
     ('$TENANT_B', 'sample-http-tool', 'http', '{"upstream":"http://upstream-sample:9000"}'::jsonb)
   ON CONFLICT(tenant_id, name) DO UPDATE SET config_json=EXCLUDED.config_json, updated_at=now();
-"
+PSQL
 
 echo "[seed] Seeding policies..."
 POLICY_JSON='{"version":1,"mode":"abac_v0","rules":[{"effect":"deny","mcp_servers_any":["demo.mcp"],"mcp_tools_any":["demo.secret"],"mcp_methods_any":["tools/call"]},{"effect":"allow","mcp_servers_any":["demo.mcp"],"mcp_tools_any":["demo.safe"],"mcp_methods_any":["tools/call"]},{"effect":"allow","roles_any":["admin","developer"],"methods_any":["GET"],"path_prefix":"/demo"}],"default":"deny"}'
