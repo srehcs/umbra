@@ -12,6 +12,18 @@ make dev
 make seed
 ```
 
+Optional: auto-seed the UI tenant
+Set `NEXT_PUBLIC_TENANT_ID` before starting the UI so the console auto-selects a tenant:
+```bash
+export NEXT_PUBLIC_TENANT_ID="<tenant-id-from-seed>"
+```
+
+Stopping the stack
+```bash
+docker compose -f deployments/docker-compose.yml down
+```
+Use `down -v` if you also want to wipe volumes and seeded data.
+
 ## Services
 - controlplane-api: http://localhost:8080
 - pdp: http://localhost:8081
