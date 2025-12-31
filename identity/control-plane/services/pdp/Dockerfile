@@ -1,9 +1,10 @@
 FROM golang:1.22-alpine AS build
 WORKDIR /src
-COPY ../../go.mod ../../go.sum ./
+COPY go.mod go.sum ./
 RUN go mod download || true
-COPY ../../packages ./packages
-COPY . .
+COPY packages ./packages
+COPY services/pdp ./services/pdp
+WORKDIR /src/services/pdp
 RUN CGO_ENABLED=0 go build -o /out/pdp ./cmd/server
 
 FROM gcr.io/distroless/static:nonroot
