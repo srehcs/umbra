@@ -7,13 +7,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Badge } from "@/components/ui/badge";
 
 const STORAGE_KEY = "umbra.tenant_id";
-const LEGACY_STORAGE_KEY = "umbra.tenant";
 function getInitialTenant() {
   if (typeof window === "undefined") return "";
-  if (window.localStorage.getItem(LEGACY_STORAGE_KEY)) {
-    console.warn("Legacy tenant key found; use umbra.tenant_id going forward.");
-    window.localStorage.removeItem(LEGACY_STORAGE_KEY);
-  }
   const existing = window.localStorage.getItem(STORAGE_KEY);
   if (existing) return existing;
   const seeded = process.env.NEXT_PUBLIC_TENANT_ID || "";
