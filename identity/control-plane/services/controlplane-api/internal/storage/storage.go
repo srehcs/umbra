@@ -390,32 +390,32 @@ func (s *Store) listReceiptsInvocation(ctx context.Context, tenant uuid.UUID, li
     ORDER BY ts DESC
     LIMIT $` + itoa(len(args))
 
-	return s.listReceiptRows(ctx, query, args)
-}
+    return s.listReceiptRows(ctx, query, args)
+    }
 
-func (s *Store) listReceiptRows(ctx context.Context, query string, args []interface{}) ([]json.RawMessage, *time.Time, error) {
-	rows, err := s.db.Query(ctx, query, args...)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer rows.Close()
+    func (s *Store) listReceiptRows(ctx context.Context, query string, args []interface{}) ([]json.RawMessage, *time.Time, error) {
+    rows, err := s.db.Query(ctx, query, args...)
+    if err != nil {
+    return nil, nil, err
+    }
+    defer rows.Close()
 
-	items := []json.RawMessage{}
-	var next *time.Time
-	for rows.Next() {
-		var ts time.Time
-		var obj []byte
-		if err := rows.Scan(&ts, &obj); err != nil {
-			return nil, nil, err
-		}
-		items = append(items, obj)
-		next = &ts
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
-	}
-	return items, next, nil
-}
+    items := []json.RawMessage{}
+    var next *time.Time
+    for rows.Next() {
+    var ts time.Time
+    var obj []byte
+    if err := rows.Scan(&ts, &obj); err != nil {
+    return nil, nil, err
+    }
+    items = append(items, obj)
+    next = &ts
+    }
+    if err := rows.Err(); err != nil {
+    return nil, nil, err
+    }
+    return items, next, nil
+    }
 
 func buildReceiptWhere(tenant uuid.UUID, table string, q string, before *time.Time, limit int) (string, []interface{}) {
 	args := []interface{}{tenant}
