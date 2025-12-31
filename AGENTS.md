@@ -13,6 +13,13 @@ make gen              # Generate (OpenAPI → TS stubs)
 make dev              # Local stack: docker compose up + seed
 make seed             # Load seed data into postgres
 ```
+Note: If `make dev` fails with `bind: address already in use` on port 5432, a local Postgres is running. Stop it (e.g., `/Library/PostgreSQL/14/bin/pg_ctl -D /Library/PostgreSQL/14/data stop -m fast`) or remap the docker compose Postgres port.
+Note: When `make dev` succeeds, it prints local endpoints (UI :3000, API :8080, PDP :8081, PEP :8082) and seeded tenant IDs; use those IDs with the `x-umbra-tenant-id` header.
+Example API calls (replace tenant ID):
+```bash
+curl -s -H "x-umbra-tenant-id: <tenant-id>" http://localhost:8080/v1/tools
+curl -s -H "x-umbra-tenant-id: <tenant-id>" http://localhost:8080/v1/policies
+```
 
 ## Architecture
 
