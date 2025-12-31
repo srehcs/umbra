@@ -78,8 +78,12 @@ func TestDecisionContractOpenAPI(t *testing.T) {
 	assertInSet(t, decisionEnum, "allow", "deny")
 
 	errResp := derefSchema(t, spec, spec.Components.Schemas["ErrorResponse"])
-	codeEnum := set(errResp.Properties["error_code"].Enum)
-	assertInSet(t, codeEnum, "POLICY_DENIED", "POLICY_INVALID", "POLICY_UNAVAILABLE")
+	if errResp.Properties["error_code"] == nil {
+		t.Fatalf("missing error_code property in ErrorResponse")
+	}
+	if errResp.Properties["error_code"].Type != "" && errResp.Properties["error_code"].Type != "string" {
+		t.Fatalf("expected error_code to be string, got %q", errResp.Properties["error_code"].Type)
+	}
 
 	op := spec.Paths["/v1/decision"].Post
 	if op == nil {

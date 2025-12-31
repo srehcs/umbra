@@ -13,6 +13,13 @@ The seed script prints two tenant IDs:
 
 Copy one of them for the `x-umbra-tenant-id` header.
 
+Optional: auto-seed the UI tenant
+Set `NEXT_PUBLIC_TENANT_ID` before starting the UI so the console auto-selects a tenant:
+```bash
+export NEXT_PUBLIC_TENANT_ID="<tenant-id-from-seed>"
+```
+If you run the UI via Docker Compose, set `NEXT_PUBLIC_TENANT_ID` in an override file or your shell before `make dev`.
+
 ## 1) Verify health
 ```bash
 curl http://localhost:8080/healthz

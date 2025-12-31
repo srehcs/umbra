@@ -36,18 +36,27 @@ paths:
                 $ref: '#/components/schemas/DecisionResponse'
         '400':
           description: Invalid request
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Policy evaluation error
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
           description: PDP unavailable
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -137,6 +146,37 @@ paths:
                 properties:
                   ok: { type: boolean }
 
+  /v1/policies/active:
+    get:
+      tags: [policies]
+      summary: Get active policy (tenant-scoped)
+      operationId: getActivePolicy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivePolicyResponse'
+        '404':
+          description: No active policy
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Storage unavailable
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /v1/policies/simulate:
     post:
       tags: [policies]
@@ -183,6 +223,79 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReceiptList'
+    post:
+      tags: [receipts]
+      summary: Ingest a receipt (tenant-scoped)
+      operationId: createReceipt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReceiptIngestRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiptIngestResponse'
+        '400':
+          description: Invalid request
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Storage error
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/receipts/verify:
+    post:
+      tags: [receipts]
+      summary: Verify receipt hash chain
+      operationId: verifyReceipts
+      parameters:
+        - in: query
+          name: kind
+          schema: { type: string, enum: [decision, invocation, all], default: all }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiptVerifyResponse'
+        '400':
+          description: Invalid request
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Storage error
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /v1/receipts/export:
     get:
@@ -229,23 +342,39 @@ paths:
                 type: string
         '400':
           description: Invalid request
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
 components:
+  headers:
+    RequestId:
+      description: Correlation ID for the request (also present in response body when applicable).
+      schema:
+        type: string
   schemas:
     ErrorResponse:
       type: object
       properties:
         error_code:
           type: string
-          enum: [POLICY_DENIED, POLICY_INVALID, POLICY_UNAVAILABLE]
+          description: Stable error identifier (service-specific until error-envelope work is complete).
         message: { type: string }
         request_id: { type: string }
         decision_id: { type: string }
         trace_id: { type: string }
+        errors:
+          type: array
+          description: Optional field-level validation issues.
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              message: { type: string }
       required: [error_code, message]
 
     TenantContext:
@@ -405,6 +534,16 @@ components:
         policy_version: { type: integer }
       required: [decision, reason]
 
+    ActivePolicyResponse:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        version: { type: integer }
+        policy_hash: { type: string }
+        updated_at: { type: string, format: date-time }
+      required: [id, name, version, policy_hash, updated_at]
+
     ReceiptList:
       type: object
       properties:
@@ -446,3 +585,74 @@ components:
         receipt_hash: { type: string }
         receipt_prev_hash: { type: string }
       required: [schema_version, kind, ts, receipt_hash]
+
+    ReceiptIngestRequest:
+      oneOf:
+        - $ref: '#/components/schemas/DecisionReceiptIngest'
+        - $ref: '#/components/schemas/InvocationReceiptIngest'
+      discriminator:
+        propertyName: kind
+
+    ReceiptIngestResponse:
+      type: object
+      properties:
+        receipt_id: { type: string }
+        hash: { type: string }
+        prev_hash: { type: string }
+      required: [receipt_id, hash]
+
+    ReceiptVerifyFailure:
+      type: object
+      properties:
+        receipt_id: { type: string }
+        code: { type: string }
+      required: [receipt_id, code]
+
+    ReceiptVerifyResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        checked: { type: integer }
+        kind: { type: string, enum: [decision, invocation, all] }
+        failure:
+          $ref: '#/components/schemas/ReceiptVerifyFailure'
+      required: [ok, checked, kind]
+
+    ReceiptIngestBase:
+      type: object
+      properties:
+        kind: { type: string, enum: [decision, invocation] }
+        request_id: { type: string }
+        decision_id: { type: string }
+        trace_id: { type: string }
+        span_id: { type: string }
+        body:
+          type: object
+          description: |
+            Redacted receipt payload (no raw tool args by default).
+      required: [kind, request_id, body]
+
+    DecisionReceiptIngest:
+      allOf:
+        - $ref: '#/components/schemas/ReceiptIngestBase'
+        - type: object
+          properties:
+            decision: { type: string, enum: [allow, deny] }
+            policy_hash: { type: string }
+            policy_version: { type: integer }
+          required: [decision, policy_hash]
+
+    InvocationReceiptIngest:
+      allOf:
+        - $ref: '#/components/schemas/ReceiptIngestBase'
+        - type: object
+          properties:
+            tool_name: { type: string }
+            method: { type: string }
+            path: { type: string }
+            outcome: { type: string, enum: [success, error, denied] }
+            status_code: { type: integer }
+            latency_ms: { type: integer }
+            policy_hash: { type: string }
+            policy_version: { type: integer }
+          required: [tool_name, method, path, outcome, latency_ms]

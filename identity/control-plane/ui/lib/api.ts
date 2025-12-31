@@ -1,18 +1,19 @@
 import type { ListResponse, PolicyRow, Receipt, Tool } from "./types";
 
-const BASE_URL =
-  process.env.NEXT_PUBLIC_CONTROLPLANE_URL?.replace(/\/$/, "") || "http://localhost:8080";
+const BASE_URL = "/api/controlplane";
+const TENANT_KEY = "umbra.tenant_id";
 
 function getTenant(): string {
   if (typeof window === "undefined") return "";
-  return localStorage.getItem("umbra.tenant") || "";
+  return localStorage.getItem(TENANT_KEY) || "";
 }
 
 async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     ...(opts.headers ? (opts.headers as Record<string, string>) : {}),
-    "x-umbra-tenant-id": getTenant(),
   };
+  const tenant = getTenant();
+  if (tenant) headers["x-umbra-tenant-id"] = tenant;
   const res = await fetch(`${BASE_URL}${path}`, { ...opts, headers });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -63,7 +64,7 @@ export const api = {
   ) => {
     const sp = new URLSearchParams();
     sp.set("limit", String(params.limit ?? 100));
-    if (params.kind) sp.set("kind", params.kind);
+    if (params.kind && params.kind !== "all") sp.set("kind", params.kind);
     if (params.q) sp.set("q", params.q);
     if (params.before) sp.set("before", params.before);
     return request<ListResponse<Receipt>>(
