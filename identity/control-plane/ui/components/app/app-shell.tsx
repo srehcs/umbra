@@ -1,8 +1,12 @@
+"use client";
+
 import Link from "next/link";
 import { Shield, Activity, Wrench, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
 import TenantSwitcher from "@/components/app/tenant-switcher";
+import AuthDevControls from "@/components/app/auth-dev-controls";
+import { useAuth } from "@/lib/auth";
 
 const nav = [
   { href: "/receipts", label: "Receipts", icon: FileText },
@@ -11,6 +15,8 @@ const nav = [
 ];
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
+  const { roles } = useAuth();
+  const roleLabel = roles.length > 0 ? roles.join(", ") : "none";
   return (
     <div className="min-h-screen bg-white">
       <div className="flex">
@@ -26,6 +32,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <div className="px-6">
             <TenantSwitcher />
+          </div>
+          <div className="px-6 pt-4">
+            <AuthDevControls />
           </div>
           <Separator className="my-6" />
           <nav className="flex flex-col gap-1 px-3">
@@ -66,7 +75,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <div className="hidden md:flex items-center gap-2 text-sm">
                 <span className="text-muted-foreground">Enterprise demo console</span>
                 <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-xs">Dev mode</span>
-                <span className="rounded-full border border-border bg-white px-2 py-0.5 text-xs">Role: developer</span>
+                <span className="rounded-full border border-border bg-white px-2 py-0.5 text-xs">Roles: {roleLabel}</span>
               </div>
               <div className="md:hidden">
                 <TenantSwitcher compact />
