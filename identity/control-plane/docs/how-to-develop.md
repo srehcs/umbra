@@ -29,6 +29,18 @@ You can also override roles in the browser with:
 localStorage.setItem("umbra.roles", "policy_admin,tool_admin,auditor");
 ```
 
+Optional: auth session headers (when AUTH_ENABLED=true)
+If you front the UI with an auth proxy, forward:
+- `x-umbra-user`
+- `x-umbra-roles` (comma-separated)
+- `x-umbra-tenant-id`
+
+Enable auth session mode (UI reads `/api/auth/session`):
+```bash
+export AUTH_ENABLED=true
+export NEXT_PUBLIC_AUTH_ENABLED=true
+```
+
 Stopping the stack
 ```bash
 docker compose -f deployments/docker-compose.yml down

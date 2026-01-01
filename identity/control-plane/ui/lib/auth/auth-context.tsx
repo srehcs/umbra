@@ -23,6 +23,12 @@ const DEFAULT_ROLES = ["developer", "tool_admin", "policy_admin", "auditor"];
 
 const AuthContext = React.createContext<AuthContextValue | null>(null);
 
+type SessionResponse = {
+  user?: AuthUser | null;
+  roles?: string[];
+  tenant_id?: string;
+};
+
 function parseRoles(input?: string | null): string[] {
   if (!input) return [];
   return input
@@ -72,17 +78,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [tenantId, setTenantId] = React.useState<string | undefined>(undefined);
 
   React.useEffect(() => {
-    const refresh = () => {
+    let cancelled = false;
+    const refreshDev = () => {
       setRoles(resolveRoles(enabled));
       setUser(resolveUser(enabled));
       setTenantId(resolveTenant());
     };
-    refresh();
-    const storageHandler = () => refresh();
-    const interval = window.setInterval(refresh, 1000);
+    const refreshSession = async () => {
+      try {
+        const res = await fetch("/api/auth/session");
+        if (!res.ok) return;
+        const data = (await res.json()) as SessionResponse;
+        if (cancelled) return;
+        setRoles(data.roles ?? []);
+        setUser(data.user ?? null);
+        setTenantId(data.tenant_id);
+      } catch {
+        if (!cancelled) {
+          setRoles([]);
+          setUser(null);
+          setTenantId(undefined);
+        }
+      }
+    };
+
+    if (enabled) {
+      void refreshSession();
+      const focusHandler = () => refreshSession();
+      window.addEventListener("focus", focusHandler);
+      return () => {
+        cancelled = true;
+        window.removeEventListener("focus", focusHandler);
+      };
+    }
+
+    refreshDev();
+    const storageHandler = () => refreshDev();
+    const interval = window.setInterval(refreshDev, 1000);
     window.addEventListener("storage", storageHandler);
     window.addEventListener("focus", storageHandler);
     return () => {
+      cancelled = true;
       window.clearInterval(interval);
       window.removeEventListener("storage", storageHandler);
       window.removeEventListener("focus", storageHandler);
