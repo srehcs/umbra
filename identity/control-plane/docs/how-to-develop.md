@@ -41,6 +41,15 @@ export AUTH_ENABLED=true
 export NEXT_PUBLIC_AUTH_ENABLED=true
 ```
 
+Example: header-based session fetch
+```bash
+curl -s \
+  -H "x-umbra-user: alice" \
+  -H "x-umbra-roles: policy_admin,tool_admin,auditor" \
+  -H "x-umbra-tenant-id: <tenant-id>" \
+  http://localhost:3000/api/auth/session | jq .
+```
+
 Stopping the stack
 ```bash
 docker compose -f deployments/docker-compose.yml down
