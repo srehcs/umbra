@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import PageHeader from "@/components/app/page-header";
 import EmptyState from "@/components/app/empty-state";
 import StatusBanner from "@/components/app/status-banner";
+import { useAuth } from "@/lib/auth";
 
 function badgeForOutcome(r: Receipt) {
   if (r.kind === "decision") {
@@ -32,6 +33,8 @@ export default function ReceiptsPage() {
   const [items, setItems] = React.useState<Receipt[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const { hasRole } = useAuth();
+  const canViewReceipts = hasRole("auditor", "policy_admin", "tool_admin", "admin");
 
   const [q, setQ] = React.useState("");
   const [kind, setKind] = React.useState<"all" | ReceiptKind>("all");
@@ -51,6 +54,7 @@ export default function ReceiptsPage() {
   const traceBaseUrl = process.env.NEXT_PUBLIC_JAEGER_BASE_URL || "";
 
   async function load(reset: boolean, signal?: AbortSignal) {
+    if (!canViewReceipts) return;
     setLoading(true);
     setError(null);
     try {
@@ -77,12 +81,14 @@ export default function ReceiptsPage() {
   }
 
   React.useEffect(() => {
+    if (!canViewReceipts) return;
     const controller = new AbortController();
     load(true, controller.signal);
     return () => controller.abort();
     // eslint-disable-next-line
-  }, []);
+  }, [canViewReceipts]);
   React.useEffect(() => {
+    if (!canViewReceipts) return;
     const controller = new AbortController();
     const t = setTimeout(() => load(true, controller.signal), 250);
     return () => {
@@ -90,7 +96,7 @@ export default function ReceiptsPage() {
       clearTimeout(t);
     };
     // eslint-disable-next-line
-  }, [q, kind]);
+  }, [q, kind, canViewReceipts]);
 
   React.useEffect(() => {
     if (!selected) {
@@ -101,6 +107,7 @@ export default function ReceiptsPage() {
   }, [selected]);
 
   async function runVerify() {
+    if (!canViewReceipts) return;
     if (!verifyEnabled) return;
     setVerifyError(null);
     setVerifyResult(null);
@@ -128,6 +135,22 @@ export default function ReceiptsPage() {
   function applyReceiptFilter(id: string) {
     setQ(id);
     setKind("all");
+  }
+
+  if (!canViewReceipts) {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          title="Receipts"
+          subtitle="Evidence trail for decisions and tool invocations (hash-chained, signing-ready)."
+        />
+        <StatusBanner
+          title="Access restricted"
+          description="Receipts require the auditor role. Update dev roles in localStorage (umbra.roles) or enable auth."
+          variant="destructive"
+        />
+      </div>
+    );
   }
 
   return (

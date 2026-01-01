@@ -16,10 +16,13 @@ import EmptyState from "@/components/app/empty-state";
 import SectionHeader from "@/components/app/section-header";
 import StatusBanner from "@/components/app/status-banner";
 import { Plus } from "lucide-react";
+import { useAuth } from "@/lib/auth";
 export default function ToolsPage() {
   const [items, setItems] = React.useState<Tool[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const { hasRole } = useAuth();
+  const canManageTools = hasRole("tool_admin");
 
   const [name, setName] = React.useState("sample-http-tool");
   const [kind, setKind] = React.useState("http");
@@ -51,6 +54,10 @@ export default function ToolsPage() {
 
   async function create() {
     setError(null);
+    if (!canManageTools) {
+      setError("Requires role: tool_admin");
+      return;
+    }
     let parsed: Record<string, unknown> = {};
     try { parsed = JSON.parse(config); } catch { setError("Config must be valid JSON"); return; }
     try {
@@ -69,38 +76,44 @@ export default function ToolsPage() {
         title="Tools"
         subtitle="Register tool surfaces and upstream config (tenant-scoped)."
         actions={(
-          <Dialog>
-            <DialogTrigger asChild>
-              <Button><Plus className="h-4 w-4 mr-2" /> New tool</Button>
-            </DialogTrigger>
-            <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Create tool</DialogTitle>
-              <DialogDescription>V0 supports kinds: http, mcp, cli. Start with http.</DialogDescription>
-            </DialogHeader>
+          canManageTools ? (
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button><Plus className="h-4 w-4 mr-2" /> New tool</Button>
+              </DialogTrigger>
+              <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Create tool</DialogTitle>
+                <DialogDescription>V0 supports kinds: http, mcp, cli. Start with http.</DialogDescription>
+              </DialogHeader>
 
-            <div className="space-y-3">
-              <div className="space-y-2">
-                <Label>Name</Label>
-                <Input value={name} onChange={(e) => setName(e.target.value)} />
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label>Name</Label>
+                  <Input value={name} onChange={(e) => setName(e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Kind</Label>
+                  <Input value={kind} onChange={(e) => setKind(e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Config (JSON)</Label>
+                  <Textarea value={config} onChange={(e) => setConfig(e.target.value)} />
+                </div>
+                {error && <div className="text-sm text-red-700">{error}</div>}
               </div>
-              <div className="space-y-2">
-                <Label>Kind</Label>
-                <Input value={kind} onChange={(e) => setKind(e.target.value)} />
-              </div>
-              <div className="space-y-2">
-                <Label>Config (JSON)</Label>
-                <Textarea value={config} onChange={(e) => setConfig(e.target.value)} />
-              </div>
-              {error && <div className="text-sm text-red-700">{error}</div>}
-            </div>
 
-            <DialogFooter>
-              <Button variant="secondary" onClick={handleRefresh} disabled={loading}>Refresh</Button>
-              <Button onClick={create}>Create</Button>
-            </DialogFooter>
-            </DialogContent>
-          </Dialog>
+              <DialogFooter>
+                <Button variant="secondary" onClick={handleRefresh} disabled={loading}>Refresh</Button>
+                <Button onClick={create}>Create</Button>
+              </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          ) : (
+            <Button disabled title="Requires role: tool_admin">
+              <Plus className="h-4 w-4 mr-2" /> New tool
+            </Button>
+          )
         )}
       />
 
@@ -108,6 +121,13 @@ export default function ToolsPage() {
         title="Development mode"
         description="Tools are tenant-scoped via header. Production will enforce tool admin roles via OIDC claims."
       />
+      {!canManageTools && (
+        <StatusBanner
+          title="Role required"
+          description="Tool creation is limited to tool_admin."
+          variant="destructive"
+        />
+      )}
 
       <Card>
         <SectionHeader
