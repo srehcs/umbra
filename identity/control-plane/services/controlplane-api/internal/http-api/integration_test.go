@@ -186,6 +186,63 @@ func TestReceiptExportFiltersAndSafety(t *testing.T) {
 	}
 }
 
+func TestReceiptIngestDecisionChain(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("UMBRA_TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("UMBRA_TEST_DATABASE_URL not set")
+	}
+
+	ctx := context.Background()
+	db, err := stor.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("db connect failed: %v", err)
+	}
+	defer db.Close()
+
+	if err := applyMigrations(t, db.Pool); err != nil {
+		t.Fatalf("migrations failed: %v", err)
+	}
+	if _, err := db.Pool.Exec(ctx, `TRUNCATE receipts_decision, receipts_invocation, policies, tools, tenants RESTART IDENTITY CASCADE`); err != nil {
+		t.Fatalf("truncate failed: %v", err)
+	}
+
+	tenantID := createTenant(t, db.Pool, "receipt-ingest-tenant")
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	server := &Server{Logger: logger, Store: storage.New(db)}
+
+	body := map[string]interface{}{
+		"actor": map[string]interface{}{"id": "user-1", "type": "human"},
+		"tool":  map[string]interface{}{"name": "demo.tool", "method": "GET", "endpoint": "/demo"},
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	first := receiptIngestRequest{
+		Kind:       "decision",
+		RequestID:  "req-1",
+		DecisionID: uuid.NewString(),
+		Decision:   "allow",
+		PolicyHash: "policy-hash-1",
+		Body:       bodyBytes,
+	}
+	resp1 := ingestReceipt(t, server, tenantID, first)
+	if resp1.Hash == "" {
+		t.Fatalf("expected hash in response")
+	}
+
+	second := receiptIngestRequest{
+		Kind:       "decision",
+		RequestID:  "req-2",
+		DecisionID: uuid.NewString(),
+		Decision:   "deny",
+		PolicyHash: "policy-hash-2",
+		Body:       bodyBytes,
+	}
+	resp2 := ingestReceipt(t, server, tenantID, second)
+	if resp2.PrevHash != resp1.Hash {
+		t.Fatalf("expected prev_hash %s, got %s", resp1.Hash, resp2.PrevHash)
+	}
+}
+
 func applyMigrations(t *testing.T, pool *pgxpool.Pool) error {
 	t.Helper()
 	sqlFiles := []string{"0001_init.sql", "0002_add_request_id.sql", "0003_add_receipt_indexes.sql", "0004_add_receipt_search_indexes.sql", "0005_add_receipt_search_text.sql"}
@@ -310,4 +367,21 @@ func listPoliciesViaAPI(t *testing.T, server *Server, tenant uuid.UUID) []policy
 		t.Fatalf("parse list policies response: %v", err)
 	}
 	return resp.Items
+}
+
+func ingestReceipt(t *testing.T, server *Server, tenant uuid.UUID, body receiptIngestRequest) receiptIngestResponse {
+	t.Helper()
+	bodyBytes, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/v1/receipts", bytes.NewReader(bodyBytes))
+	req.Header.Set("x-umbra-tenant-id", tenant.String())
+	w := httptest.NewRecorder()
+	server.handleReceipts(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("receipt ingest failed: %d %s", w.Code, w.Body.String())
+	}
+	var out receiptIngestResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("parse receipt ingest response: %v", err)
+	}
+	return out
 }
