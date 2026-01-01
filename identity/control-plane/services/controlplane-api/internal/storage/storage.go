@@ -355,7 +355,7 @@ func (s *Store) listReceiptsUnion(ctx context.Context, tenant uuid.UUID, limit i
 	}
 
 	query := `
-    SELECT ts, obj, request_id, decision_id, trace_id, receipt_hash, receipt_prev_hash, search_text FROM (
+    SELECT ts, obj, id, request_id, decision_id, trace_id, receipt_hash, receipt_prev_hash, search_text FROM (
       SELECT ts, jsonb_build_object(
         'kind','decision',
         'id', id,
@@ -369,6 +369,7 @@ func (s *Store) listReceiptsUnion(ctx context.Context, tenant uuid.UUID, limit i
         'trace_id', trace_id,
         'span_id', span_id
       ) AS obj,
+      id,
       request_id,
       decision_id::text AS decision_id,
       trace_id,
@@ -396,6 +397,7 @@ func (s *Store) listReceiptsUnion(ctx context.Context, tenant uuid.UUID, limit i
         'trace_id', trace_id,
         'span_id', span_id
       ) AS obj,
+      id,
       request_id,
       decision_id::text AS decision_id,
       trace_id,
@@ -426,12 +428,13 @@ func (s *Store) listReceiptsUnion(ctx context.Context, tenant uuid.UUID, limit i
 	for rows.Next() {
 		var ts time.Time
 		var obj []byte
-		var requestID, decisionID, traceID, receiptHash string
+		var receiptID, requestID, decisionID, traceID, receiptHash string
 		var receiptPrevHash *string
 		var searchText *string
-		if err := rows.Scan(&ts, &obj, &requestID, &decisionID, &traceID, &receiptHash, &receiptPrevHash, &searchText); err != nil {
+		if err := rows.Scan(&ts, &obj, &receiptID, &requestID, &decisionID, &traceID, &receiptHash, &receiptPrevHash, &searchText); err != nil {
 			return nil, nil, err
 		}
+		_ = receiptID
 		items = append(items, obj)
 		next = &ts
 	}
@@ -490,32 +493,32 @@ func (s *Store) listReceiptsInvocation(ctx context.Context, tenant uuid.UUID, li
     ORDER BY ts DESC
     LIMIT $` + itoa(len(args))
 
-    return s.listReceiptRows(ctx, query, args)
-    }
+	return s.listReceiptRows(ctx, query, args)
+}
 
-    func (s *Store) listReceiptRows(ctx context.Context, query string, args []interface{}) ([]json.RawMessage, *time.Time, error) {
-    rows, err := s.db.Query(ctx, query, args...)
-    if err != nil {
-    return nil, nil, err
-    }
-    defer rows.Close()
+func (s *Store) listReceiptRows(ctx context.Context, query string, args []interface{}) ([]json.RawMessage, *time.Time, error) {
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
 
-    items := []json.RawMessage{}
-    var next *time.Time
-    for rows.Next() {
-    var ts time.Time
-    var obj []byte
-    if err := rows.Scan(&ts, &obj); err != nil {
-    return nil, nil, err
-    }
-    items = append(items, obj)
-    next = &ts
-    }
-    if err := rows.Err(); err != nil {
-    return nil, nil, err
-    }
-    return items, next, nil
-    }
+	items := []json.RawMessage{}
+	var next *time.Time
+	for rows.Next() {
+		var ts time.Time
+		var obj []byte
+		if err := rows.Scan(&ts, &obj); err != nil {
+			return nil, nil, err
+		}
+		items = append(items, obj)
+		next = &ts
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return items, next, nil
+}
 
 func buildReceiptWhere(tenant uuid.UUID, table string, q string, before *time.Time, limit int) (string, []interface{}) {
 	args := []interface{}{tenant}
@@ -528,7 +531,7 @@ func buildReceiptWhere(tenant uuid.UUID, table string, q string, before *time.Ti
 	}
 	if q != "" {
 		if isUUID(q) {
-			where += " AND (request_id = $" + itoa(idx) + " OR decision_id::text = $" + itoa(idx) + " OR trace_id = $" + itoa(idx) + ")"
+			where += " AND (id::text = $" + itoa(idx) + " OR request_id = $" + itoa(idx) + " OR decision_id::text = $" + itoa(idx) + " OR trace_id = $" + itoa(idx) + ")"
 			args = append(args, q)
 			idx++
 		} else if isHash(q) {
@@ -550,7 +553,7 @@ func buildReceiptSearchClause(q string, start int) (string, []interface{}, int) 
 		return "", nil, start
 	}
 	if isUUID(q) {
-		return " WHERE (request_id = $" + itoa(start) + " OR decision_id = $" + itoa(start) + " OR trace_id = $" + itoa(start) + ")",
+		return " WHERE (id::text = $" + itoa(start) + " OR request_id = $" + itoa(start) + " OR decision_id = $" + itoa(start) + " OR trace_id = $" + itoa(start) + ")",
 			[]interface{}{q}, start + 1
 	}
 	if isHash(q) {
