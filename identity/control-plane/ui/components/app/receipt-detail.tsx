@@ -52,12 +52,12 @@ export default function ReceiptDetail({ r, onFilterDecisionId, onFilterRequestId
             <Field label="Request ID" value={r.request_id} />
             <div className="flex flex-wrap gap-2">
               {r.decision_id && onFilterDecisionId && (
-                <Button size="sm" variant="outline" onClick={() => onFilterDecisionId(r.decision_id)}>
+                <Button size="sm" variant="outline" onClick={() => onFilterDecisionId(r.decision_id!)}>
                   View related by decision_id
                 </Button>
               )}
               {r.request_id && onFilterRequestId && (
-                <Button size="sm" variant="outline" onClick={() => onFilterRequestId(r.request_id)}>
+                <Button size="sm" variant="outline" onClick={() => onFilterRequestId(r.request_id!)}>
                   View related by request_id
                 </Button>
               )}

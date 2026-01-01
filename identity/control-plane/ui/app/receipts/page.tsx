@@ -177,7 +177,10 @@ export default function ReceiptsPage() {
         )}
       />
 
-      {verifyResult && (
+      {verifyResult && (() => {
+        const failureReceiptId = verifyResult.failure?.receipt_id;
+        const failureCode = verifyResult.failure?.code;
+        return (
         <StatusBanner
           title={verifyResult.ok ? "Integrity verified" : "Integrity check failed"}
           variant={verifyResult.ok ? "default" : "destructive"}
@@ -186,14 +189,14 @@ export default function ReceiptsPage() {
               <div>
                 Checked {verifyResult.checked} receipt(s) ({verifyResult.kind}).
               </div>
-              {verifyResult.failure?.receipt_id && (
+              {failureReceiptId && failureCode && (
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs text-muted-foreground">Failure code</span>
-                  <span className="code text-xs">{verifyResult.failure.code}</span>
+                  <span className="code text-xs">{failureCode}</span>
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => applyReceiptFilter(verifyResult.failure.receipt_id)}
+                    onClick={() => applyReceiptFilter(failureReceiptId)}
                   >
                     View failing receipt
                   </Button>
@@ -202,7 +205,8 @@ export default function ReceiptsPage() {
             </div>
           }
         />
-      )}
+        );
+      })()}
       {verifyError && (
         <StatusBanner
           title="Verification failed"
@@ -301,7 +305,7 @@ export default function ReceiptsPage() {
                           r={selected ?? r}
                           onFilterDecisionId={applyDecisionFilter}
                           onFilterRequestId={applyRequestFilter}
-                          traceBaseUrl={traceBaseUrl || undefined}
+                          traceBaseUrl={traceBaseUrl}
                         />
 
                         <div className="mt-4">
