@@ -17,6 +17,7 @@ import PageHeader from "@/components/app/page-header";
 import EmptyState from "@/components/app/empty-state";
 import SectionHeader from "@/components/app/section-header";
 import StatusBanner from "@/components/app/status-banner";
+import { useAuth } from "@/lib/auth";
 
 import type { PolicyRow } from "@/lib/types";
 
@@ -33,6 +34,8 @@ export default function PoliciesPage() {
   const [items, setItems] = React.useState<PolicyRow[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const { hasRole } = useAuth();
+  const canManagePolicies = hasRole("policy_admin");
 
   const [name, setName] = React.useState("default-policy");
   const [policy, setPolicy] = React.useState(JSON.stringify(starterPolicy, null, 2));
@@ -119,6 +122,10 @@ export default function PoliciesPage() {
 
   async function create() {
     setError(null);
+    if (!canManagePolicies) {
+      setError("Requires role: policy_admin");
+      return;
+    }
     const ok = validateOnly();
     if (!ok) return;
 
@@ -133,6 +140,10 @@ export default function PoliciesPage() {
 
     async function activate(id: string) {
     setError(null);
+    if (!canManagePolicies) {
+      setError("Requires role: policy_admin");
+      return;
+    }
     if (!window.confirm("Activate this policy? This will deactivate any currently active policy.")) {
       return;
     }
@@ -196,6 +207,10 @@ export default function PoliciesPage() {
   async function updatePolicy() {
     if (!editing) return;
     setError(null);
+    if (!canManagePolicies) {
+      setError("Requires role: policy_admin");
+      return;
+    }
     const ok = validateEdit();
     if (!ok) return;
     const parsed: unknown = JSON.parse(editPolicy);
@@ -215,17 +230,18 @@ export default function PoliciesPage() {
         title="Policies"
         subtitle="Author, validate, simulate, and activate policies (default deny)."
         actions={(
-          <Dialog>
-            <DialogTrigger asChild>
-              <Button><Plus className="h-4 w-4 mr-2" /> New policy</Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-3xl">
-            <DialogHeader>
-              <DialogTitle>Create policy</DialogTitle>
-              <DialogDescription>
-                V0 uses ABAC JSON. Use validation + simulation before persisting.
-              </DialogDescription>
-            </DialogHeader>
+          canManagePolicies ? (
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button><Plus className="h-4 w-4 mr-2" /> New policy</Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-3xl">
+              <DialogHeader>
+                <DialogTitle>Create policy</DialogTitle>
+                <DialogDescription>
+                  V0 uses ABAC JSON. Use validation + simulation before persisting.
+                </DialogDescription>
+              </DialogHeader>
 
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-3">
@@ -338,12 +354,17 @@ export default function PoliciesPage() {
               </div>
             </div>
 
-            <DialogFooter>
-              <Button variant="secondary" onClick={handleRefresh} disabled={loading}>Refresh</Button>
-              <Button onClick={create}>Create</Button>
-            </DialogFooter>
-            </DialogContent>
-          </Dialog>
+              <DialogFooter>
+                <Button variant="secondary" onClick={handleRefresh} disabled={loading}>Refresh</Button>
+                <Button onClick={create}>Create</Button>
+              </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          ) : (
+            <Button disabled title="Requires role: policy_admin">
+              <Plus className="h-4 w-4 mr-2" /> New policy
+            </Button>
+          )
         )}
       />
 
@@ -351,6 +372,13 @@ export default function PoliciesPage() {
         title="Development mode"
         description="Policy management is tenant-scoped via header. Production will enforce RBAC via Keycloak claims."
       />
+      {!canManagePolicies && (
+        <StatusBanner
+          title="Role required"
+          description="Policy creation, editing, and activation require policy_admin."
+          variant="destructive"
+        />
+      )}
 
       <Card>
         <SectionHeader
@@ -410,7 +438,7 @@ export default function PoliciesPage() {
                   <TableCell className="text-xs text-muted-foreground">{new Date(p.updated_at).toLocaleString()}</TableCell>
                   <TableCell className="code text-xs text-muted-foreground">{p.policy_hash?.slice(0, 12)}</TableCell>
                   <TableCell className="text-right space-x-2">
-                    <Button size="sm" variant="outline" onClick={() => openEdit(p)}>
+                    <Button size="sm" variant="outline" onClick={() => openEdit(p)} disabled={!canManagePolicies} title={!canManagePolicies ? "Requires role: policy_admin" : undefined}>
                       <Pencil className="h-4 w-4 mr-2" />
                       Edit
                     </Button>
@@ -418,7 +446,8 @@ export default function PoliciesPage() {
                       size="sm"
                       variant={p.active ? "secondary" : "default"}
                       onClick={() => activate(p.id)}
-                      disabled={p.active}
+                      disabled={p.active || !canManagePolicies}
+                      title={!canManagePolicies ? "Requires role: policy_admin" : undefined}
                     >
                       <CheckCircle2 className="h-4 w-4 mr-2" />
                       Activate
@@ -456,7 +485,7 @@ export default function PoliciesPage() {
 
           <DialogFooter>
             <Button variant="outline" onClick={validateEdit}><BadgeCheck className="h-4 w-4 mr-2" /> Validate</Button>
-            <Button onClick={updatePolicy} disabled={editing?.active}>Update</Button>
+            <Button onClick={updatePolicy} disabled={editing?.active || !canManagePolicies} title={!canManagePolicies ? "Requires role: policy_admin" : undefined}>Update</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

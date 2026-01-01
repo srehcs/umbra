@@ -18,6 +18,17 @@ Set `NEXT_PUBLIC_TENANT_ID` before starting the UI so the console auto-selects a
 export NEXT_PUBLIC_TENANT_ID="<tenant-id-from-seed>"
 ```
 
+Optional: dev auth roles for UI gating
+Set roles and user for local testing (client-side only):
+```bash
+export NEXT_PUBLIC_DEV_ROLES="policy_admin,tool_admin,auditor"
+export NEXT_PUBLIC_DEV_USER="dev-user"
+```
+You can also override roles in the browser with:
+```js
+localStorage.setItem("umbra.roles", "policy_admin,tool_admin,auditor");
+```
+
 Stopping the stack
 ```bash
 docker compose -f deployments/docker-compose.yml down
