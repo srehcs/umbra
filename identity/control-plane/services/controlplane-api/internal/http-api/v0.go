@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -54,6 +55,35 @@ func policyResponseFrom(p dbstore.Policy) policyResponse {
 type ListReceiptsResponse struct {
 	Items      []json.RawMessage `json:"items"`
 	NextBefore string            `json:"next_before,omitempty"`
+}
+
+type fieldError struct {
+	Field   string `json:"field"`
+	Message string `json:"message"`
+}
+
+type receiptIngestRequest struct {
+	Kind          string          `json:"kind"`
+	RequestID     string          `json:"request_id"`
+	DecisionID    string          `json:"decision_id,omitempty"`
+	TraceID       string          `json:"trace_id,omitempty"`
+	SpanID        string          `json:"span_id,omitempty"`
+	Decision      string          `json:"decision,omitempty"`
+	PolicyHash    string          `json:"policy_hash,omitempty"`
+	PolicyVersion *int            `json:"policy_version,omitempty"`
+	ToolName      string          `json:"tool_name,omitempty"`
+	Method        string          `json:"method,omitempty"`
+	Path          string          `json:"path,omitempty"`
+	Outcome       string          `json:"outcome,omitempty"`
+	StatusCode    *int            `json:"status_code,omitempty"`
+	LatencyMs     *int            `json:"latency_ms,omitempty"`
+	Body          json.RawMessage `json:"body"`
+}
+
+type receiptIngestResponse struct {
+	ReceiptID string `json:"receipt_id"`
+	Hash      string `json:"hash"`
+	PrevHash  string `json:"prev_hash,omitempty"`
 }
 
 func registerV0(mux *http.ServeMux, logger *slog.Logger) {
@@ -551,10 +581,17 @@ func (s *Server) handleSimulatePolicy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleReceiptsList(w, r)
+	case http.MethodPost:
+		s.handleReceiptsIngest(w, r)
+	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
 	}
+}
+
+func (s *Server) handleReceiptsList(w http.ResponseWriter, r *http.Request) {
 	if s.Store == nil {
 		http.Error(w, "storage not configured", 503)
 		return
@@ -591,6 +628,170 @@ func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request) {
 	if next != nil {
 		resp["next_before"] = next.UTC().Format(time.RFC3339)
 	}
+	writeJSON(w, resp)
+}
+
+func (s *Server) handleReceiptsIngest(w http.ResponseWriter, r *http.Request) {
+	if s.Store == nil {
+		http.Error(w, "storage not configured", 503)
+		return
+	}
+	tenant, err := s.tenantFromRequest(r)
+	if err != nil || tenant == uuid.Nil {
+		writeErrorResponse(w, http.StatusBadRequest, "INVALID_TENANT", "missing/invalid x-umbra-tenant-id", nil, r)
+		return
+	}
+
+	var body receiptIngestRequest
+	if err := decodeJSON(r, &body); err != nil {
+		writeErrorResponse(w, http.StatusBadRequest, "RECEIPT_INVALID", "invalid json", nil, r)
+		return
+	}
+	if errs := validateReceiptIngest(body); len(errs) > 0 {
+		writeErrorResponse(w, http.StatusBadRequest, "RECEIPT_INVALID", "receipt validation failed", errs, r)
+		return
+	}
+	if len(body.Body) > maxReceiptBodyBytes {
+		writeErrorResponse(w, http.StatusBadRequest, "RECEIPT_TOO_LARGE", "receipt body too large", nil, r)
+		return
+	}
+	if containsArgsField(body.Body) {
+		writeErrorResponse(w, http.StatusBadRequest, "RECEIPT_INVALID", "receipt body must not include raw tool args", nil, r)
+		return
+	}
+
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, body.Body); err != nil {
+		writeErrorResponse(w, http.StatusBadRequest, "RECEIPT_INVALID", "receipt body must be valid JSON", nil, r)
+		return
+	}
+	compactBody := json.RawMessage(compact.Bytes())
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	switch body.Kind {
+	case "decision":
+		decisionID, err := uuid.Parse(body.DecisionID)
+		if err != nil {
+			writeErrorResponse(w, http.StatusBadRequest, "RECEIPT_INVALID", "invalid decision_id", nil, r)
+			return
+		}
+		prev, err := s.Store.LastDecisionHash(ctx, tenant)
+		if err != nil {
+			http.Error(w, "db error", 500)
+			return
+		}
+		hash := receipts.HashBytes(append([]byte(prev), compactBody...))
+		id, err := s.Store.InsertDecisionReceipt(ctx, tenant, decisionID, body.RequestID, body.PolicyHash, body.Decision, compactBody, prev, hash, body.TraceID, body.SpanID)
+		if err != nil {
+			http.Error(w, "db error", 500)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		writeJSON(w, receiptIngestResponse{ReceiptID: id.String(), Hash: hash, PrevHash: prev})
+	case "invocation":
+		var decisionID *uuid.UUID
+		if body.DecisionID != "" {
+			parsed, err := uuid.Parse(body.DecisionID)
+			if err != nil {
+				writeErrorResponse(w, http.StatusBadRequest, "RECEIPT_INVALID", "invalid decision_id", nil, r)
+				return
+			}
+			decisionID = &parsed
+		}
+		prev, err := s.Store.LastInvocationHash(ctx, tenant)
+		if err != nil {
+			http.Error(w, "db error", 500)
+			return
+		}
+		hash := receipts.HashBytes(append([]byte(prev), compactBody...))
+		latencyMs := 0
+		if body.LatencyMs != nil {
+			latencyMs = *body.LatencyMs
+		}
+		id, err := s.Store.InsertInvocationReceipt(ctx, tenant, decisionID, body.RequestID, body.ToolName, body.Method, body.Path, body.Outcome, body.StatusCode, latencyMs, compactBody, prev, hash, body.TraceID, body.SpanID)
+		if err != nil {
+			http.Error(w, "db error", 500)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		writeJSON(w, receiptIngestResponse{ReceiptID: id.String(), Hash: hash, PrevHash: prev})
+	default:
+		writeErrorResponse(w, http.StatusBadRequest, "RECEIPT_INVALID", "invalid kind", nil, r)
+	}
+}
+
+const maxReceiptBodyBytes = 64 * 1024
+
+func validateReceiptIngest(body receiptIngestRequest) []fieldError {
+	var errs []fieldError
+	if strings.TrimSpace(body.Kind) == "" {
+		errs = append(errs, fieldError{Field: "kind", Message: "required"})
+	}
+	if strings.TrimSpace(body.RequestID) == "" {
+		errs = append(errs, fieldError{Field: "request_id", Message: "required"})
+	}
+	if len(body.Body) == 0 {
+		errs = append(errs, fieldError{Field: "body", Message: "required"})
+	}
+	switch body.Kind {
+	case "decision":
+		if strings.TrimSpace(body.DecisionID) == "" {
+			errs = append(errs, fieldError{Field: "decision_id", Message: "required"})
+		}
+		if body.Decision != "allow" && body.Decision != "deny" {
+			errs = append(errs, fieldError{Field: "decision", Message: "must be allow or deny"})
+		}
+		if strings.TrimSpace(body.PolicyHash) == "" {
+			errs = append(errs, fieldError{Field: "policy_hash", Message: "required"})
+		}
+	case "invocation":
+		if strings.TrimSpace(body.ToolName) == "" {
+			errs = append(errs, fieldError{Field: "tool_name", Message: "required"})
+		}
+		if strings.TrimSpace(body.Method) == "" {
+			errs = append(errs, fieldError{Field: "method", Message: "required"})
+		}
+		if strings.TrimSpace(body.Path) == "" {
+			errs = append(errs, fieldError{Field: "path", Message: "required"})
+		}
+		if body.Outcome != "success" && body.Outcome != "error" && body.Outcome != "denied" {
+			errs = append(errs, fieldError{Field: "outcome", Message: "must be success, error, or denied"})
+		}
+		if body.LatencyMs == nil || *body.LatencyMs < 0 {
+			errs = append(errs, fieldError{Field: "latency_ms", Message: "required"})
+		}
+	default:
+		if strings.TrimSpace(body.Kind) != "" {
+			errs = append(errs, fieldError{Field: "kind", Message: "must be decision or invocation"})
+		}
+	}
+	return errs
+}
+
+func containsArgsField(raw json.RawMessage) bool {
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return false
+	}
+	_, hasArgs := m["args"]
+	_, hasArguments := m["arguments"]
+	return hasArgs || hasArguments
+}
+
+func writeErrorResponse(w http.ResponseWriter, status int, code string, message string, errs []fieldError, r *http.Request) {
+	resp := map[string]interface{}{
+		"error_code": code,
+		"message":    message,
+	}
+	if len(errs) > 0 {
+		resp["errors"] = errs
+	}
+	if reqID := r.Header.Get("x-request-id"); reqID != "" {
+		resp["request_id"] = reqID
+	}
+	w.WriteHeader(status)
 	writeJSON(w, resp)
 }
 
