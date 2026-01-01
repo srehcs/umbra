@@ -39,6 +39,16 @@ export default function ReceiptsPage() {
   const [nextBefore, setNextBefore] = React.useState<string | undefined>(undefined);
   const [selected, setSelected] = React.useState<Receipt | null>(null);
   const [selectedJSON, setSelectedJSON] = React.useState<string>("");
+  const [verifyResult, setVerifyResult] = React.useState<{
+    ok: boolean;
+    checked: number;
+    kind: string;
+    failure?: { receipt_id: string; code: string };
+  } | null>(null);
+  const [verifyError, setVerifyError] = React.useState<string | null>(null);
+  const [verifyLoading, setVerifyLoading] = React.useState(false);
+  const verifyEnabled = process.env.NEXT_PUBLIC_RECEIPTS_VERIFY_ENABLED === "true";
+  const traceBaseUrl = process.env.NEXT_PUBLIC_JAEGER_BASE_URL || "";
 
   async function load(reset: boolean, signal?: AbortSignal) {
     setLoading(true);
@@ -90,6 +100,36 @@ export default function ReceiptsPage() {
     setSelectedJSON(JSON.stringify(selected, null, 2));
   }, [selected]);
 
+  async function runVerify() {
+    if (!verifyEnabled) return;
+    setVerifyError(null);
+    setVerifyResult(null);
+    setVerifyLoading(true);
+    try {
+      const res = await api.verifyReceipts({ kind: "all", limit: 100 });
+      setVerifyResult(res);
+    } catch (e: unknown) {
+      setVerifyError(e instanceof Error ? e.message : "Verification failed");
+    } finally {
+      setVerifyLoading(false);
+    }
+  }
+
+  function applyDecisionFilter(id: string) {
+    setQ(id);
+    setKind("all");
+  }
+
+  function applyRequestFilter(id: string) {
+    setQ(id);
+    setKind("all");
+  }
+
+  function applyReceiptFilter(id: string) {
+    setQ(id);
+    setKind("all");
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -127,10 +167,49 @@ export default function ReceiptsPage() {
                 </DialogFooter>
               </DialogContent>
             </Dialog>
+            {verifyEnabled && (
+              <Button variant="outline" onClick={runVerify} disabled={verifyLoading}>
+                {verifyLoading ? "Verifying…" : "Verify integrity"}
+              </Button>
+            )}
             <Button variant="secondary" onClick={() => load(true)} disabled={loading}>Refresh</Button>
           </>
         )}
       />
+
+      {verifyResult && (
+        <StatusBanner
+          title={verifyResult.ok ? "Integrity verified" : "Integrity check failed"}
+          variant={verifyResult.ok ? "default" : "destructive"}
+          description={
+            <div className="space-y-2 text-sm">
+              <div>
+                Checked {verifyResult.checked} receipt(s) ({verifyResult.kind}).
+              </div>
+              {verifyResult.failure?.receipt_id && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Failure code</span>
+                  <span className="code text-xs">{verifyResult.failure.code}</span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => applyReceiptFilter(verifyResult.failure.receipt_id)}
+                  >
+                    View failing receipt
+                  </Button>
+                </div>
+              )}
+            </div>
+          }
+        />
+      )}
+      {verifyError && (
+        <StatusBanner
+          title="Verification failed"
+          variant="destructive"
+          description={verifyError}
+        />
+      )}
 
       <StatusBanner
         title="Development mode"
@@ -218,7 +297,12 @@ export default function ReceiptsPage() {
                           </DialogDescription>
                         </DialogHeader>
 
-                        <ReceiptDetail r={selected ?? r} />
+                        <ReceiptDetail
+                          r={selected ?? r}
+                          onFilterDecisionId={applyDecisionFilter}
+                          onFilterRequestId={applyRequestFilter}
+                          traceBaseUrl={traceBaseUrl || undefined}
+                        />
 
                         <div className="mt-4">
                           <div className="mb-2 text-xs text-muted-foreground">Raw JSON</div>

@@ -86,4 +86,15 @@ export const api = {
       signal ? { signal } : {},
     );
   },
+  verifyReceipts: (params: { kind?: "decision" | "invocation" | "all"; limit?: number } = {}) => {
+    const sp = new URLSearchParams();
+    if (params.kind) sp.set("kind", params.kind);
+    if (params.limit) sp.set("limit", String(params.limit));
+    return request<{
+      ok: boolean;
+      checked: number;
+      kind: string;
+      failure?: { receipt_id: string; code: string };
+    }>(`/v1/receipts/verify?${sp.toString()}`, { method: "POST" });
+  },
 };
