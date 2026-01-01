@@ -1,25 +1,26 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ShieldCheck, FileText, Wrench } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import PageHeader from "@/components/app/page-header";
+import StatusBanner from "@/components/app/status-banner";
 
 export default function Home() {
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Welcome</h1>
-        <p className="text-sm text-muted-foreground">
-          This console is optimized for a high-signal V0 demo: tools + policies + receipts, with traceability.
-        </p>
-      </div>
+      <PageHeader
+        title="Welcome"
+        subtitle="This console is optimized for a high-signal V0 demo: tools + policies + receipts, with traceability."
+      />
 
-      <Alert>
-  <AlertTitle>Development mode</AlertTitle>
-  <AlertDescription>
-    This console uses <span className="code">x-umbra-tenant-id</span> from the tenant switcher.
-    Once Keycloak OIDC is wired, tenant and roles will come from claims.
-  </AlertDescription>
-</Alert>
+      <StatusBanner
+        title="Development mode"
+        description={
+          <>
+            This console uses <span className="code">x-umbra-tenant-id</span> from the tenant switcher.
+            Once Keycloak OIDC is wired, tenant and roles will come from claims.
+          </>
+        }
+      />
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card>

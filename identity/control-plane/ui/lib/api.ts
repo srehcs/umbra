@@ -56,6 +56,20 @@ export const api = {
     request<{ id: string; name: string; version: number; policy_hash: string; updated_at: string }>(
       "/v1/policies/active",
     ),
+  simulatePolicyServer: (body: {
+    actor_roles?: string[];
+    method: string;
+    path: string;
+    policy?: unknown;
+  }) =>
+    request<{ decision: string; reason: string; rule_index?: number; policy_hash?: string; policy_version?: number }>(
+      "/v1/policies/simulate",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
 
   // Receipts
   listReceipts: (
