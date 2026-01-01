@@ -11,7 +11,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import ReceiptDetail from "@/components/app/receipt-detail";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import PageHeader from "@/components/app/page-header";
+import EmptyState from "@/components/app/empty-state";
+import StatusBanner from "@/components/app/status-banner";
 
 function badgeForOutcome(r: Receipt) {
   if (r.kind === "decision") {
@@ -89,54 +92,54 @@ export default function ReceiptsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Receipts</h1>
-          <p className="text-sm text-muted-foreground">
-            Evidence trail for decisions and tool invocations (hash-chained, signing-ready).
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Dialog>
-            <DialogTrigger asChild>
-              <Button variant="outline">Export</Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-2xl">
-              <DialogHeader>
-                <DialogTitle>Export receipts</DialogTitle>
-                <DialogDescription>
-                  Use the export endpoint to download JSON or CSV with basic filters.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="text-sm text-muted-foreground">
-                <div className="mb-2">Example (JSON, last 1 hour):</div>
-                <pre className="code text-xs bg-muted p-3 rounded-md overflow-auto">
+      <PageHeader
+        title="Receipts"
+        subtitle="Evidence trail for decisions and tool invocations (hash-chained, signing-ready)."
+        actions={(
+          <>
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button variant="outline">Export</Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-2xl">
+                <DialogHeader>
+                  <DialogTitle>Export receipts</DialogTitle>
+                  <DialogDescription>
+                    Use the export endpoint to download JSON or CSV with basic filters.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="text-sm text-muted-foreground">
+                  <div className="mb-2">Example (JSON, last 1 hour):</div>
+                  <pre className="code text-xs bg-muted p-3 rounded-md overflow-auto">
 {`curl -sS -H "x-umbra-tenant-id: <tenant_id>" \\
   "http://localhost:8080/v1/receipts/export?format=json&from=$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)"`}
-                </pre>
-                <div className="mt-3 mb-2">Example (CSV, denies only):</div>
-                <pre className="code text-xs bg-muted p-3 rounded-md overflow-auto">
+                  </pre>
+                  <div className="mt-3 mb-2">Example (CSV, denies only):</div>
+                  <pre className="code text-xs bg-muted p-3 rounded-md overflow-auto">
 {`curl -sS -H "x-umbra-tenant-id: <tenant_id>" \\
   "http://localhost:8080/v1/receipts/export?format=csv&decision=deny&limit=200"`}
-                </pre>
-              </div>
-              <DialogFooter>
-                <Button variant="secondary" onClick={() => navigator.clipboard.writeText("http://localhost:8080/v1/receipts/export")}>
-                  Copy endpoint
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-          <Button variant="secondary" onClick={() => load(true)} disabled={loading}>Refresh</Button>
-        </div>
-      </div>
+                  </pre>
+                </div>
+                <DialogFooter>
+                  <Button variant="secondary" onClick={() => navigator.clipboard.writeText("http://localhost:8080/v1/receipts/export")}>
+                    Copy endpoint
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+            <Button variant="secondary" onClick={() => load(true)} disabled={loading}>Refresh</Button>
+          </>
+        )}
+      />
 
-      <Alert>
-        <AlertTitle>Development mode</AlertTitle>
-        <AlertDescription>
-          Tenant context is provided via <span className="code">x-umbra-tenant-id</span>. Production derives tenant and roles from OIDC claims.
-        </AlertDescription>
-      </Alert>
+      <StatusBanner
+        title="Development mode"
+        description={
+          <>
+            Tenant context is provided via <span className="code">x-umbra-tenant-id</span>. Production derives tenant and roles from OIDC claims.
+          </>
+        }
+      />
 
       <Card>
         <CardHeader className="gap-2">
@@ -148,18 +151,21 @@ export default function ReceiptsPage() {
             <div className="flex flex-col gap-2 md:flex-row md:items-center">
               <div className="w-44">
                 <label className="text-xs text-muted-foreground">Kind</label>
-                <select
-                  className="mt-1 h-10 w-full rounded-md border border-border bg-white px-3 text-sm"
+                <Select
                   value={kind}
-                  onChange={(e) => {
-                    const v = e.target.value as string;
-                    if (v === "decision" || v === "invocation" || v === "all") setKind(v);
+                  onValueChange={(value) => {
+                    if (value === "decision" || value === "invocation" || value === "all") setKind(value);
                   }}
                 >
-                  <option value="all">All</option>
-                  <option value="decision">Decision</option>
-                  <option value="invocation">Invocation</option>
-                </select>
+                  <SelectTrigger className="mt-1 h-10">
+                    <SelectValue placeholder="All" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="decision">Decision</SelectItem>
+                    <SelectItem value="invocation">Invocation</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div className="w-72">
                 <label className="text-xs text-muted-foreground">Filter</label>
@@ -170,7 +176,14 @@ export default function ReceiptsPage() {
         </CardHeader>
 
         <CardContent>
-          {error && <div className="mb-3 text-sm text-red-700">{error}</div>}
+          {error && (
+            <StatusBanner
+              className="mb-3"
+              title="Load failed"
+              description={error}
+              variant="destructive"
+            />
+          )}
           <Table>
             <TableHeader>
               <TableRow>
@@ -229,7 +242,9 @@ export default function ReceiptsPage() {
               ))}
               {items.length === 0 && !loading && (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-sm text-muted-foreground">No receipts yet. Run PEP requests to generate receipts.</TableCell>
+                  <TableCell colSpan={7}>
+                    <EmptyState message="No receipts yet. Run PEP requests to generate receipts." />
+                  </TableCell>
                 </TableRow>
               )}
             </TableBody>

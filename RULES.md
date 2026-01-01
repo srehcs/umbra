@@ -20,6 +20,9 @@ See: `docs/how-to-develop.md` for the “golden path” workflow used by this sc
 - UI fetches must be abortable; cancel stale requests on unmount or filter changes.
 - UI should avoid expensive render-time serialization (e.g., JSON.stringify in render); memoize or lazy-render.
 
+## UI standards
+- Prefer shared UI components under `identity/control-plane/ui/components/ui/`; add a component there instead of raw elements when standardizing behavior.
+
 ## CI/CD defaults
 - CI must run Go tests (`go test ./...`) from `identity/control-plane`.
 - CI must run UI lint (`pnpm lint`) from `identity/control-plane/ui` with a frozen lockfile.

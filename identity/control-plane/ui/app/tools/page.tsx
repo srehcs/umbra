@@ -4,17 +4,18 @@ import * as React from "react";
 import type { Tool } from "@/lib/types";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import PageHeader from "@/components/app/page-header";
+import EmptyState from "@/components/app/empty-state";
+import SectionHeader from "@/components/app/section-header";
+import StatusBanner from "@/components/app/status-banner";
 import { Plus } from "lucide-react";
-
-
 export default function ToolsPage() {
   const [items, setItems] = React.useState<Tool[]>([]);
   const [loading, setLoading] = React.useState(false);
@@ -64,17 +65,15 @@ export default function ToolsPage() {
     <div className="space-y-6">
       {/* Development mode banner */}
       
-      <div className="flex items-end justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Tools</h1>
-          <p className="text-sm text-muted-foreground">Register tool surfaces and upstream config (tenant-scoped).</p>
-        </div>
-
-        <Dialog>
-          <DialogTrigger asChild>
-            <Button><Plus className="h-4 w-4 mr-2" /> New tool</Button>
-          </DialogTrigger>
-          <DialogContent>
+      <PageHeader
+        title="Tools"
+        subtitle="Register tool surfaces and upstream config (tenant-scoped)."
+        actions={(
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button><Plus className="h-4 w-4 mr-2" /> New tool</Button>
+            </DialogTrigger>
+            <DialogContent>
             <DialogHeader>
               <DialogTitle>Create tool</DialogTitle>
               <DialogDescription>V0 supports kinds: http, mcp, cli. Start with http.</DialogDescription>
@@ -100,24 +99,30 @@ export default function ToolsPage() {
               <Button variant="secondary" onClick={handleRefresh} disabled={loading}>Refresh</Button>
               <Button onClick={create}>Create</Button>
             </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </div>
+            </DialogContent>
+          </Dialog>
+        )}
+      />
 
-      <Alert>
-        <AlertTitle>Development mode</AlertTitle>
-        <AlertDescription>Tools are tenant-scoped via header. Production will enforce tool admin roles via OIDC claims.</AlertDescription>
-      </Alert>
+      <StatusBanner
+        title="Development mode"
+        description="Tools are tenant-scoped via header. Production will enforce tool admin roles via OIDC claims."
+      />
 
       <Card>
-        <CardHeader>
-          <CardTitle>Registered tools</CardTitle>
-          <CardDescription>
-            {loading ? "Loading…" : `${items.length} tool(s)`}
-          </CardDescription>
-        </CardHeader>
+        <SectionHeader
+          title="Registered tools"
+          description={loading ? "Loading…" : `${items.length} tool(s)`}
+        />
         <CardContent>
-          {error && <div className="mb-3 text-sm text-red-700">{error}</div>}
+          {error && (
+            <StatusBanner
+              className="mb-3"
+              title="Load failed"
+              description={error}
+              variant="destructive"
+            />
+          )}
           <Table>
             <TableHeader>
               <TableRow>
@@ -136,8 +141,8 @@ export default function ToolsPage() {
               ))}
               {items.length === 0 && !loading && (
                 <TableRow>
-                  <TableCell colSpan={3} className="text-sm text-muted-foreground">
-                    No tools yet. Create one.
+                  <TableCell colSpan={3}>
+                    <EmptyState message="No tools yet. Create one." />
                   </TableCell>
                 </TableRow>
               )}
