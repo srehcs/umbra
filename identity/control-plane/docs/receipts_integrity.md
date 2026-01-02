@@ -31,3 +31,34 @@ ordered chain (oldest to newest). Failures are reported with:
 
 This is signing-ready: tables already include optional signature fields (`signature_alg`,
 `signature_kid`, `signature`, `signed_at`).
+
+## Known issue: HASH_MISMATCH from JSONB reordering
+
+When receipts are stored, the hash is computed from canonical JSON bytes produced by Go struct
+marshaling (field order is stable). During verification, the current implementation reads
+`body_json` back from Postgres as JSONB text and hashes those bytes. JSONB does not preserve key
+order, so the byte sequence can differ from the original canonical JSON even if the semantic
+content is identical. This can trigger `HASH_MISMATCH` even on a fresh database.
+
+Root cause:
+- Hashing uses canonical JSON bytes (Go struct field order).
+- Verification uses JSONB text (Postgres key order).
+- Different byte order → different hash.
+
+Implication:
+- `HASH_MISMATCH` may appear even without tampering when JSONB reorders keys.
+
+Mitigation:
+- Store the canonical JSON bytes used for hashing in `body_canonical` and verify against that column when present. This preserves the exact byte sequence used at hash time.
+
+Reset note:
+- The dev Postgres uses a bind mount at `identity/control-plane/deployments/local/.data/postgres`. To fully reset receipts for verification, stop the stack and delete that directory before reseeding.
+
+Example reset commands:
+```bash
+cd identity/control-plane
+docker compose -f deployments/docker-compose.yml down
+rm -rf deployments/local/.data/postgres
+make dev
+make seed
+```

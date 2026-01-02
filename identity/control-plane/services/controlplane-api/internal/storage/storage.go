@@ -253,10 +253,10 @@ func (s *Store) InsertDecisionReceipt(ctx context.Context,
 ) (uuid.UUID, error) {
 	var id uuid.UUID
 	err := s.db.QueryRow(ctx, `
-    INSERT INTO receipts_decision(tenant_id, decision_id, request_id, policy_hash, decision, body_json, prev_hash, hash, trace_id, span_id)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+    INSERT INTO receipts_decision(tenant_id, decision_id, request_id, policy_hash, decision, body_json, body_canonical, prev_hash, hash, trace_id, span_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
     RETURNING id`,
-		tenant, decisionID, nullIfEmpty(requestID), policyHash, decision, body, nullIfEmpty(prevHash), hash, nullIfEmpty(traceID), nullIfEmpty(spanID)).
+		tenant, decisionID, nullIfEmpty(requestID), policyHash, decision, body, body, nullIfEmpty(prevHash), hash, nullIfEmpty(traceID), nullIfEmpty(spanID)).
 		Scan(&id)
 	return id, err
 }
@@ -279,8 +279,8 @@ func (s *Store) InsertInvocationReceipt(ctx context.Context,
 ) (uuid.UUID, error) {
 	var id uuid.UUID
 	err := s.db.QueryRow(ctx, `
-    INSERT INTO receipts_invocation(tenant_id, decision_id, request_id, tool_name, method, path, outcome, status_code, latency_ms, body_json, prev_hash, hash, trace_id, span_id)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+    INSERT INTO receipts_invocation(tenant_id, decision_id, request_id, tool_name, method, path, outcome, status_code, latency_ms, body_json, body_canonical, prev_hash, hash, trace_id, span_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
     RETURNING id`,
 		tenant,
 		decisionID,
@@ -291,6 +291,7 @@ func (s *Store) InsertInvocationReceipt(ctx context.Context,
 		outcome,
 		statusCode,
 		latencyMs,
+		body,
 		body,
 		nullIfEmpty(prevHash),
 		hash,
@@ -1095,7 +1096,7 @@ func derefString(v *string) string {
 
 func (s *Store) listReceiptChain(ctx context.Context, tenant uuid.UUID, limit int, table string) ([]receipts.ChainRecord, error) {
 	rows, err := s.db.Query(ctx, `
-    SELECT id, body_json, prev_hash, hash, ts
+    SELECT id, COALESCE(body_canonical, convert_to(body_json::text, 'utf8')) AS body, prev_hash, hash, ts
     FROM `+table+`
     WHERE tenant_id=$1
     ORDER BY ts DESC
