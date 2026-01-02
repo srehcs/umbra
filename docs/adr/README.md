@@ -22,3 +22,4 @@ This directory is the single source of truth for architectural decisions across 
 - `0007-service-to-service-auth-identity.md` — Service-to-service auth and workload identity
 - `0008-pep-integration-pattern.md` — PEP integration pattern (HTTP proxy / ext_authz)
 - `0009-identity-provider-claims-model.md` — Identity provider choice and claims model
+- `0010-typed-api-contracts-and-e2e.md` — Typed OpenAPI contracts and E2E harness

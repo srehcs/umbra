@@ -1,6 +1,7 @@
 import "./globals.css";
 import type { Metadata } from "next";
 import AppShell from "@/components/app/app-shell";
+import { AuthProvider } from "@/lib/auth";
 
 export const metadata: Metadata = {
   title: "Umbra V0-C Console",
@@ -11,7 +12,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
-        <AppShell>{children}</AppShell>
+        <AuthProvider>
+          <AppShell>{children}</AppShell>
+        </AuthProvider>
       </body>
     </html>
   );

@@ -207,6 +207,106 @@ type ExportRecord struct {
 	ReceiptPrevHash string    `json:"receipt_prev_hash,omitempty"`
 }
 
+func (s *Store) LastDecisionHash(ctx context.Context, tenant uuid.UUID) (string, error) {
+	var h *string
+	err := s.db.QueryRow(ctx, `
+    SELECT hash FROM receipts_decision
+    WHERE tenant_id=$1
+    ORDER BY ts DESC
+    LIMIT 1`, tenant).Scan(&h)
+	if err != nil {
+		return "", err
+	}
+	if h == nil {
+		return "", nil
+	}
+	return *h, nil
+}
+
+func (s *Store) LastInvocationHash(ctx context.Context, tenant uuid.UUID) (string, error) {
+	var h *string
+	err := s.db.QueryRow(ctx, `
+    SELECT hash FROM receipts_invocation
+    WHERE tenant_id=$1
+    ORDER BY ts DESC
+    LIMIT 1`, tenant).Scan(&h)
+	if err != nil {
+		return "", err
+	}
+	if h == nil {
+		return "", nil
+	}
+	return *h, nil
+}
+
+func (s *Store) InsertDecisionReceipt(ctx context.Context,
+	tenant uuid.UUID,
+	decisionID uuid.UUID,
+	requestID string,
+	policyHash string,
+	decision string,
+	body json.RawMessage,
+	prevHash string,
+	hash string,
+	traceID string,
+	spanID string,
+) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := s.db.QueryRow(ctx, `
+    INSERT INTO receipts_decision(tenant_id, decision_id, request_id, policy_hash, decision, body_json, prev_hash, hash, trace_id, span_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+    RETURNING id`,
+		tenant, decisionID, nullIfEmpty(requestID), policyHash, decision, body, nullIfEmpty(prevHash), hash, nullIfEmpty(traceID), nullIfEmpty(spanID)).
+		Scan(&id)
+	return id, err
+}
+
+func (s *Store) InsertInvocationReceipt(ctx context.Context,
+	tenant uuid.UUID,
+	decisionID *uuid.UUID,
+	requestID string,
+	toolName string,
+	method string,
+	path string,
+	outcome string,
+	statusCode *int,
+	latencyMs int,
+	body json.RawMessage,
+	prevHash string,
+	hash string,
+	traceID string,
+	spanID string,
+) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := s.db.QueryRow(ctx, `
+    INSERT INTO receipts_invocation(tenant_id, decision_id, request_id, tool_name, method, path, outcome, status_code, latency_ms, body_json, prev_hash, hash, trace_id, span_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+    RETURNING id`,
+		tenant,
+		decisionID,
+		nullIfEmpty(requestID),
+		toolName,
+		method,
+		path,
+		outcome,
+		statusCode,
+		latencyMs,
+		body,
+		nullIfEmpty(prevHash),
+		hash,
+		nullIfEmpty(traceID),
+		nullIfEmpty(spanID),
+	).Scan(&id)
+	return id, err
+}
+
+func nullIfEmpty(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 func (s *Store) ListReceiptChain(ctx context.Context, tenant uuid.UUID, limit int, kind string) ([]receipts.ChainRecord, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
@@ -255,7 +355,7 @@ func (s *Store) listReceiptsUnion(ctx context.Context, tenant uuid.UUID, limit i
 	}
 
 	query := `
-    SELECT ts, obj, request_id, decision_id, trace_id, receipt_hash, receipt_prev_hash, search_text FROM (
+    SELECT ts, obj, id, request_id, decision_id, trace_id, receipt_hash, receipt_prev_hash, search_text FROM (
       SELECT ts, jsonb_build_object(
         'kind','decision',
         'id', id,
@@ -269,6 +369,7 @@ func (s *Store) listReceiptsUnion(ctx context.Context, tenant uuid.UUID, limit i
         'trace_id', trace_id,
         'span_id', span_id
       ) AS obj,
+      id,
       request_id,
       decision_id::text AS decision_id,
       trace_id,
@@ -296,6 +397,7 @@ func (s *Store) listReceiptsUnion(ctx context.Context, tenant uuid.UUID, limit i
         'trace_id', trace_id,
         'span_id', span_id
       ) AS obj,
+      id,
       request_id,
       decision_id::text AS decision_id,
       trace_id,
@@ -326,12 +428,13 @@ func (s *Store) listReceiptsUnion(ctx context.Context, tenant uuid.UUID, limit i
 	for rows.Next() {
 		var ts time.Time
 		var obj []byte
-		var requestID, decisionID, traceID, receiptHash string
+		var receiptID, requestID, decisionID, traceID, receiptHash string
 		var receiptPrevHash *string
 		var searchText *string
-		if err := rows.Scan(&ts, &obj, &requestID, &decisionID, &traceID, &receiptHash, &receiptPrevHash, &searchText); err != nil {
+		if err := rows.Scan(&ts, &obj, &receiptID, &requestID, &decisionID, &traceID, &receiptHash, &receiptPrevHash, &searchText); err != nil {
 			return nil, nil, err
 		}
+		_ = receiptID
 		items = append(items, obj)
 		next = &ts
 	}
@@ -390,32 +493,32 @@ func (s *Store) listReceiptsInvocation(ctx context.Context, tenant uuid.UUID, li
     ORDER BY ts DESC
     LIMIT $` + itoa(len(args))
 
-    return s.listReceiptRows(ctx, query, args)
-    }
+	return s.listReceiptRows(ctx, query, args)
+}
 
-    func (s *Store) listReceiptRows(ctx context.Context, query string, args []interface{}) ([]json.RawMessage, *time.Time, error) {
-    rows, err := s.db.Query(ctx, query, args...)
-    if err != nil {
-    return nil, nil, err
-    }
-    defer rows.Close()
+func (s *Store) listReceiptRows(ctx context.Context, query string, args []interface{}) ([]json.RawMessage, *time.Time, error) {
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
 
-    items := []json.RawMessage{}
-    var next *time.Time
-    for rows.Next() {
-    var ts time.Time
-    var obj []byte
-    if err := rows.Scan(&ts, &obj); err != nil {
-    return nil, nil, err
-    }
-    items = append(items, obj)
-    next = &ts
-    }
-    if err := rows.Err(); err != nil {
-    return nil, nil, err
-    }
-    return items, next, nil
-    }
+	items := []json.RawMessage{}
+	var next *time.Time
+	for rows.Next() {
+		var ts time.Time
+		var obj []byte
+		if err := rows.Scan(&ts, &obj); err != nil {
+			return nil, nil, err
+		}
+		items = append(items, obj)
+		next = &ts
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return items, next, nil
+}
 
 func buildReceiptWhere(tenant uuid.UUID, table string, q string, before *time.Time, limit int) (string, []interface{}) {
 	args := []interface{}{tenant}
@@ -428,7 +531,7 @@ func buildReceiptWhere(tenant uuid.UUID, table string, q string, before *time.Ti
 	}
 	if q != "" {
 		if isUUID(q) {
-			where += " AND (request_id = $" + itoa(idx) + " OR decision_id::text = $" + itoa(idx) + " OR trace_id = $" + itoa(idx) + ")"
+			where += " AND (id::text = $" + itoa(idx) + " OR request_id = $" + itoa(idx) + " OR decision_id::text = $" + itoa(idx) + " OR trace_id = $" + itoa(idx) + ")"
 			args = append(args, q)
 			idx++
 		} else if isHash(q) {
@@ -450,7 +553,7 @@ func buildReceiptSearchClause(q string, start int) (string, []interface{}, int) 
 		return "", nil, start
 	}
 	if isUUID(q) {
-		return " WHERE (request_id = $" + itoa(start) + " OR decision_id = $" + itoa(start) + " OR trace_id = $" + itoa(start) + ")",
+		return " WHERE (id::text = $" + itoa(start) + " OR request_id = $" + itoa(start) + " OR decision_id = $" + itoa(start) + " OR trace_id = $" + itoa(start) + ")",
 			[]interface{}{q}, start + 1
 	}
 	if isHash(q) {

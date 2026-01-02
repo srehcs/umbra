@@ -20,6 +20,12 @@ export NEXT_PUBLIC_TENANT_ID="<tenant-id-from-seed>"
 ```
 If you run the UI via Docker Compose, set `NEXT_PUBLIC_TENANT_ID` in an override file or your shell before `make dev`.
 
+Troubleshooting:
+- If any API call returns `storage not configured`, restart the services after Postgres is ready:
+  ```bash
+  docker compose -f deployments/docker-compose.yml restart controlplane-api pdp
+  ```
+
 ## 1) Verify health
 ```bash
 curl http://localhost:8080/healthz

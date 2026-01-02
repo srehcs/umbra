@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import type { Receipt } from "@/lib/types";
 
 function Field({ label, value }: { label: string; value: unknown }) {
@@ -12,8 +13,16 @@ function Field({ label, value }: { label: string; value: unknown }) {
   );
 }
 
-export default function ReceiptDetail({ r }: { r: Receipt }) {
+type ReceiptDetailProps = {
+  r: Receipt;
+  onFilterDecisionId?: (id: string) => void;
+  onFilterRequestId?: (id: string) => void;
+  traceBaseUrl?: string;
+};
+
+export default function ReceiptDetail({ r, onFilterDecisionId, onFilterRequestId, traceBaseUrl }: ReceiptDetailProps) {
   const kind = r.kind;
+  const traceUrl = traceBaseUrl && r.trace_id ? `${traceBaseUrl.replace(/\/$/, "")}/trace/${r.trace_id}` : null;
 
   return (
     <div className="space-y-4">
@@ -41,6 +50,23 @@ export default function ReceiptDetail({ r }: { r: Receipt }) {
             </div>
             <Field label="Decision ID" value={r.decision_id} />
             <Field label="Request ID" value={r.request_id} />
+            <div className="flex flex-wrap gap-2">
+              {r.decision_id && onFilterDecisionId && (
+                <Button size="sm" variant="outline" onClick={() => onFilterDecisionId(r.decision_id!)}>
+                  View related by decision_id
+                </Button>
+              )}
+              {r.request_id && onFilterRequestId && (
+                <Button size="sm" variant="outline" onClick={() => onFilterRequestId(r.request_id!)}>
+                  View related by request_id
+                </Button>
+              )}
+              {traceUrl && (
+                <Button size="sm" variant="secondary" asChild>
+                  <a href={traceUrl} target="_blank" rel="noreferrer">Open trace</a>
+                </Button>
+              )}
+            </div>
             <Field label="Trace ID" value={r.trace_id} />
             <Field label="Span ID" value={r.span_id} />
           </CardContent>

@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 COMPOSE := docker compose -f deployments/docker-compose.yml
 
-.PHONY: bootstrap fmt lint test gen up down logs dev seed docker-build verify migrate receipts-verify
+.PHONY: bootstrap fmt lint test gen up down logs dev seed docker-build verify migrate receipts-verify e2e-setup e2e e2e-fast e2e-local
 
 bootstrap:
 	@echo "Bootstrap: go mod tidy (optional) + ui deps"
@@ -21,8 +21,8 @@ test:
 	@go test ./...
 
 gen:
-	@echo "Generate (V0): OpenAPI → TS types (stub)"
-	@cd ui && pnpm --if-present gen || true
+	@echo "Generate (V0): OpenAPI → TS types"
+	@cd ui && pnpm --if-present gen
 
 up:
 	$(COMPOSE) up -d --build
@@ -76,3 +76,20 @@ receipts-verify:
 	KIND=$${KIND:-all} ; \
 	LIMIT=$${LIMIT:-100} ; \
 	curl -s -X POST -H "x-umbra-tenant-id: $$TENANT_ID" "http://localhost:8080/v1/receipts/verify?kind=$$KIND&limit=$$LIMIT" | jq .
+
+e2e-setup:
+	@bash scripts/dev/e2e_setup.sh
+
+e2e:
+	@bash scripts/dev/e2e_setup.sh
+	@cd ui && pnpm test:e2e
+
+# Reuse existing images (skip docker --build)
+e2e-fast:
+	@E2E_NO_BUILD=1 bash scripts/dev/e2e_setup.sh
+	@cd ui && pnpm test:e2e
+
+# Assume stack already running; skip docker compose up
+e2e-local:
+	@E2E_SKIP_UP=1 bash scripts/dev/e2e_setup.sh
+	@cd ui && pnpm test:e2e

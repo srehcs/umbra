@@ -89,6 +89,7 @@ services:
       UMBRA_ENV: dev
       PEP_MODE: observe
       PDP_URL: http://pdp:8081
+      UPSTREAM_URL: http://upstream-sample:9000
       DATABASE_URL: postgres://umbra:umbra@postgres:5432/umbra?sslmode=disable
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
       PORT: "8082"

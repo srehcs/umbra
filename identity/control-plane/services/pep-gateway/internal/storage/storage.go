@@ -3,8 +3,10 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	stor "github.com/umbra-labs/agent-identity-control-plane/packages/go/storage"
@@ -22,6 +24,9 @@ func (s *Store) LastInvocationHash(ctx context.Context, tenant uuid.UUID) (strin
     ORDER BY ts DESC
     LIMIT 1`, tenant).Scan(&h)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
 		return "", err
 	}
 	if h == nil {

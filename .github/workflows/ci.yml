@@ -32,6 +32,13 @@ jobs:
       - name: pnpm install
         working-directory: identity/control-plane/ui
         run: pnpm install --frozen-lockfile
+      - name: pnpm gen
+        working-directory: identity/control-plane/ui
+        run: pnpm gen
+      - name: verify contracts up to date
+        run: |
+          git diff --exit-code identity/control-plane/packages/contracts/openapi.ts
+          git diff --exit-code identity/control-plane/ui/contracts/openapi.ts
       - name: pnpm lint
         working-directory: identity/control-plane/ui
         run: pnpm lint
