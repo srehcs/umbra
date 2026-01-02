@@ -50,6 +50,23 @@ curl -s \
   http://localhost:3000/api/auth/session | jq .
 ```
 
+E2E smoke tests
+```bash
+make e2e
+```
+Prereqs:
+- Node 20.x LTS (20.11+ recommended) for Playwright stability.
+- Run `pnpm -C ui exec playwright install` once to download browsers.
+
+Faster options:
+```bash
+make e2e-fast  # reuse existing images (skip docker --build)
+make e2e-local # assumes stack already running, skips docker compose up
+```
+Defaults:
+- `E2E_TENANT_ID=11111111-1111-1111-1111-111111111111`
+- `E2E_ROLES=policy_admin,tool_admin,auditor`
+
 Stopping the stack
 ```bash
 docker compose -f deployments/docker-compose.yml down

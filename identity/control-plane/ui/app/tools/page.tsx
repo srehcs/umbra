@@ -79,7 +79,9 @@ export default function ToolsPage() {
           canManageTools ? (
             <Dialog>
               <DialogTrigger asChild>
-                <Button><Plus className="h-4 w-4 mr-2" /> New tool</Button>
+                <Button data-testid="tool-new">
+                  <Plus className="h-4 w-4 mr-2" /> New tool
+                </Button>
               </DialogTrigger>
               <DialogContent>
               <DialogHeader>
@@ -90,27 +92,27 @@ export default function ToolsPage() {
               <div className="space-y-3">
                 <div className="space-y-2">
                   <Label>Name</Label>
-                  <Input value={name} onChange={(e) => setName(e.target.value)} />
+                  <Input value={name} onChange={(e) => setName(e.target.value)} data-testid="tool-name" />
                 </div>
                 <div className="space-y-2">
                   <Label>Kind</Label>
-                  <Input value={kind} onChange={(e) => setKind(e.target.value)} />
+                  <Input value={kind} onChange={(e) => setKind(e.target.value)} data-testid="tool-kind" />
                 </div>
                 <div className="space-y-2">
                   <Label>Config (JSON)</Label>
-                  <Textarea value={config} onChange={(e) => setConfig(e.target.value)} />
+                  <Textarea value={config} onChange={(e) => setConfig(e.target.value)} data-testid="tool-config" />
                 </div>
                 {error && <div className="text-sm text-red-700">{error}</div>}
               </div>
 
               <DialogFooter>
                 <Button variant="secondary" onClick={handleRefresh} disabled={loading}>Refresh</Button>
-                <Button onClick={create}>Create</Button>
+                <Button onClick={create} data-testid="tool-create">Create</Button>
               </DialogFooter>
               </DialogContent>
             </Dialog>
           ) : (
-            <Button disabled title="Requires role: tool_admin">
+            <Button disabled title="Requires role: tool_admin" data-testid="tool-new">
               <Plus className="h-4 w-4 mr-2" /> New tool
             </Button>
           )
@@ -143,7 +145,7 @@ export default function ToolsPage() {
               variant="destructive"
             />
           )}
-          <Table>
+          <Table data-testid="tools-table">
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
@@ -153,7 +155,7 @@ export default function ToolsPage() {
             </TableHeader>
             <TableBody>
               {items.map((t: Tool) => (
-                <TableRow key={t.id}>
+                <TableRow key={t.id} data-testid="tools-row">
                   <TableCell className="font-medium">{t.name}</TableCell>
                   <TableCell><Badge variant="outline">{t.kind}</Badge></TableCell>
                   <TableCell className="code text-xs text-muted-foreground">{t.id}</TableCell>

@@ -134,17 +134,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [roles],
   );
 
-  const value = React.useMemo<AuthContextValue>(
-    () => ({
+  const value = React.useMemo<AuthContextValue>(() => {
+    const base = {
       enabled,
       user,
       roles,
-      tenantId,
       tenantIds: tenantId ? [tenantId] : [],
       hasRole,
-    }),
-    [enabled, hasRole, roles, tenantId, user],
-  );
+    };
+    return tenantId ? { ...base, tenantId } : base;
+  }, [enabled, hasRole, roles, tenantId, user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -50,7 +50,12 @@ export default function TenantSwitcher({ compact = false }: { compact?: boolean 
 
       <Dialog>
         <DialogTrigger asChild>
-          <Button variant="outline" size="sm" className={compact ? "h-8" : "h-9"}>
+          <Button
+            variant="outline"
+            size="sm"
+            className={compact ? "h-8" : "h-9"}
+            data-testid="tenant-set-button"
+          >
             {compact ? "Tenant" : "Set tenant"}
           </Button>
         </DialogTrigger>
@@ -67,6 +72,7 @@ export default function TenantSwitcher({ compact = false }: { compact?: boolean 
               placeholder="Paste tenant UUID (from `make seed` output)"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
+              data-testid="tenant-input"
             />
             <p className="text-xs text-muted-foreground">
               Tip: run <span className="code">make seed</span> and copy TenantA or TenantB ID.

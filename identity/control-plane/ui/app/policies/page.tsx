@@ -55,7 +55,7 @@ export default function PoliciesPage() {
     reason: string;
     policy_hash?: string;
     policy_version?: number;
-    rule_index?: number;
+    rule_index?: number | null;
   } | null>(null);
   const [simMode, setSimMode] = React.useState<"local" | "server">("local");
   const [simError, setSimError] = React.useState<string | null>(null);
@@ -233,7 +233,7 @@ export default function PoliciesPage() {
           canManagePolicies ? (
             <Dialog>
               <DialogTrigger asChild>
-                <Button><Plus className="h-4 w-4 mr-2" /> New policy</Button>
+                <Button data-testid="policy-new"><Plus className="h-4 w-4 mr-2" /> New policy</Button>
               </DialogTrigger>
               <DialogContent className="max-w-3xl">
               <DialogHeader>
@@ -247,7 +247,7 @@ export default function PoliciesPage() {
               <div className="space-y-3">
                 <div className="space-y-2">
                   <Label>Name</Label>
-                  <Input value={name} onChange={(e) => setName(e.target.value)} />
+                  <Input value={name} onChange={(e) => setName(e.target.value)} data-testid="policy-name" />
                 </div>
 
                 <Alert>
@@ -350,18 +350,18 @@ export default function PoliciesPage() {
 
               <div className="space-y-2">
                 <Label>Policy JSON</Label>
-                <Textarea className="min-h-[360px]" value={policy} onChange={(e) => setPolicy(e.target.value)} />
+                <Textarea className="min-h-[360px]" value={policy} onChange={(e) => setPolicy(e.target.value)} data-testid="policy-json" />
               </div>
             </div>
 
               <DialogFooter>
                 <Button variant="secondary" onClick={handleRefresh} disabled={loading}>Refresh</Button>
-                <Button onClick={create}>Create</Button>
+              <Button onClick={create} data-testid="policy-create">Create</Button>
               </DialogFooter>
               </DialogContent>
             </Dialog>
           ) : (
-            <Button disabled title="Requires role: policy_admin">
+            <Button disabled title="Requires role: policy_admin" data-testid="policy-new">
               <Plus className="h-4 w-4 mr-2" /> New policy
             </Button>
           )
@@ -380,14 +380,14 @@ export default function PoliciesPage() {
         />
       )}
 
-      <Card>
+      <Card data-testid="active-policy-card">
         <SectionHeader
           title="Active policy"
           description={activePolicy ? "Currently enforced policy for this tenant." : "No active policy yet."}
         />
         <CardContent>
           {activePolicy ? (
-            <div className="flex flex-wrap items-center gap-3 text-sm">
+            <div className="flex flex-wrap items-center gap-3 text-sm" data-testid="active-policy">
               <Badge variant="success">active</Badge>
               <span className="font-medium">{activePolicy.name}</span>
               <span className="text-muted-foreground">v{activePolicy.version}</span>
@@ -416,7 +416,7 @@ export default function PoliciesPage() {
               variant="destructive"
             />
           )}
-          <Table>
+          <Table data-testid="policies-table">
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
@@ -429,7 +429,7 @@ export default function PoliciesPage() {
             </TableHeader>
             <TableBody>
               {items.map((p) => (
-                <TableRow key={p.id}>
+                <TableRow key={p.id} data-testid="policies-row">
                   <TableCell className="font-medium">{p.name}</TableCell>
                   <TableCell>{p.version}</TableCell>
                   <TableCell>
@@ -438,7 +438,7 @@ export default function PoliciesPage() {
                   <TableCell className="text-xs text-muted-foreground">{new Date(p.updated_at).toLocaleString()}</TableCell>
                   <TableCell className="code text-xs text-muted-foreground">{p.policy_hash?.slice(0, 12)}</TableCell>
                   <TableCell className="text-right space-x-2">
-                    <Button size="sm" variant="outline" onClick={() => openEdit(p)} disabled={!canManagePolicies} title={!canManagePolicies ? "Requires role: policy_admin" : undefined}>
+                    <Button size="sm" variant="outline" onClick={() => openEdit(p)} disabled={!canManagePolicies} title={!canManagePolicies ? "Requires role: policy_admin" : undefined} data-testid={`policy-edit-${p.id}`}>
                       <Pencil className="h-4 w-4 mr-2" />
                       Edit
                     </Button>
@@ -448,6 +448,7 @@ export default function PoliciesPage() {
                       onClick={() => activate(p.id)}
                       disabled={p.active || !canManagePolicies}
                       title={!canManagePolicies ? "Requires role: policy_admin" : undefined}
+                      data-testid={`policy-activate-${p.id}`}
                     >
                       <CheckCircle2 className="h-4 w-4 mr-2" />
                       Activate
