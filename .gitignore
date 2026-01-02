@@ -2,3 +2,4 @@
 .gocache/
 .pnpm/
 .pnpm-store/
+identity/control-plane/ui/test-results/

@@ -1,3 +1,5 @@
+import type { components } from "@contracts/openapi";
+
 export type UUID = string;
 
 export type ReceiptKind = "decision" | "invocation";
@@ -38,25 +40,19 @@ export type InvocationReceipt = {
 
 export type Receipt = DecisionReceipt | InvocationReceipt;
 
-export type Tool = {
-  id: UUID;
-  name: string;
-  kind: string;
-  config?: Record<string, unknown>;
-  tenant_id?: UUID;
-  created_at?: string;
-  updated_at?: string;
-};
+export type Tool = components["schemas"]["Tool"];
 
-export type PolicyRow = {
-  id: UUID;
-  name: string;
-  version: number;
-  active: boolean;
-  policy_hash: string;
-  policy: Record<string, unknown>;
-  updated_at: string;
-};
+export type CreateToolRequest = components["schemas"]["CreateToolRequest"];
+
+export type PolicyRow = components["schemas"]["Policy"];
+
+export type CreatePolicyRequest = components["schemas"]["CreatePolicyRequest"];
+
+export type ActivePolicyResponse = components["schemas"]["ActivePolicyResponse"];
+
+export type SimulateResponse = components["schemas"]["SimulateResponse"];
+
+export type SimulateRequest = components["schemas"]["SimulateRequest"];
 
 export type ListResponse<T> = {
   items: T[];

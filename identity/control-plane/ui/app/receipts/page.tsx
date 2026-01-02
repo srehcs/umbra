@@ -191,7 +191,7 @@ export default function ReceiptsPage() {
               </DialogContent>
             </Dialog>
             {verifyEnabled && (
-              <Button variant="outline" onClick={runVerify} disabled={verifyLoading}>
+              <Button variant="outline" onClick={runVerify} disabled={verifyLoading} data-testid="receipts-verify">
                 {verifyLoading ? "Verifying…" : "Verify integrity"}
               </Button>
             )}
@@ -262,6 +262,7 @@ export default function ReceiptsPage() {
                   onValueChange={(value) => {
                     if (value === "decision" || value === "invocation" || value === "all") setKind(value);
                   }}
+                  data-testid="receipts-kind"
                 >
                   <SelectTrigger className="mt-1 h-10">
                     <SelectValue placeholder="All" />
@@ -275,7 +276,7 @@ export default function ReceiptsPage() {
               </div>
               <div className="w-72">
                 <label className="text-xs text-muted-foreground">Filter</label>
-                <Input className="mt-1" placeholder="tool, decision, request, hash, trace…" value={q} onChange={(e) => setQ(e.target.value)} />
+                <Input className="mt-1" placeholder="tool, decision, request, hash, trace…" value={q} onChange={(e) => setQ(e.target.value)} data-testid="receipts-filter" />
               </div>
             </div>
           </div>
@@ -290,7 +291,7 @@ export default function ReceiptsPage() {
               variant="destructive"
             />
           )}
-          <Table>
+          <Table data-testid="receipts-table">
             <TableHeader>
               <TableRow>
                 <TableHead>Kind</TableHead>
@@ -304,7 +305,7 @@ export default function ReceiptsPage() {
             </TableHeader>
             <TableBody>
               {items.map((r, idx) => (
-                <TableRow key={`${r.kind}-${r.id ?? idx}`}>
+                <TableRow key={`${r.kind}-${r.id ?? idx}`} data-testid="receipts-row">
                   <TableCell><Badge variant="outline">{r.kind}</Badge></TableCell>
                   <TableCell>{badgeForOutcome(r)}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{String(r.ts ?? "")}</TableCell>

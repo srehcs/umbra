@@ -466,7 +466,9 @@ components:
         id: { type: string }
         name: { type: string }
         kind: { type: string }
-        config: { type: object }
+        config:
+          type: object
+          additionalProperties: true
       required: [id, name, kind]
 
     ToolList:
@@ -481,7 +483,9 @@ components:
       properties:
         name: { type: string }
         kind: { type: string }
-        config: { type: object }
+        config:
+          type: object
+          additionalProperties: true
       required: [name, kind]
 
     Policy:
@@ -492,10 +496,13 @@ components:
         version: { type: integer }
         active: { type: boolean }
         policy_hash: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
         policy:
           type: object
           description: JSON policy document
-      required: [id, name, version, active, policy_hash]
+          additionalProperties: true
+      required: [id, name, version, active, policy_hash, created_at, updated_at]
 
     PolicyList:
       type: object
@@ -508,7 +515,9 @@ components:
       type: object
       properties:
         name: { type: string }
-        policy: { type: object }
+        policy:
+          type: object
+          additionalProperties: true
       required: [name, policy]
 
     SimulateRequest:
@@ -522,6 +531,7 @@ components:
         policy:
           type: object
           description: Optional policy JSON to simulate against instead of active policy
+          additionalProperties: true
       required: [method, path]
 
     SimulateResponse:
@@ -549,7 +559,9 @@ components:
       properties:
         items:
           type: array
-          items: { type: object }
+          items:
+            type: object
+            additionalProperties: true
         next_before:
           type: string
           format: date-time
@@ -630,6 +642,7 @@ components:
           type: object
           description: |
             Redacted receipt payload (no raw tool args by default).
+          additionalProperties: true
       required: [kind, request_id, body]
 
     DecisionReceiptIngest:
