@@ -12,6 +12,7 @@ services:
       - ../migrations:/migrations:ro
 
   redis:
+    profiles: ["obs"]
     image: redis:7
     ports:
       - "6379:6379"
@@ -32,11 +33,13 @@ services:
       - "8090:8090"
 
   jaeger:
+    profiles: ["obs"]
     image: jaegertracing/all-in-one:latest
     ports:
       - "16686:16686"
 
   otel-collector:
+    profiles: ["obs"]
     image: otel/opentelemetry-collector-contrib:0.108.0
     command: ["--config=/etc/otel-collector.yml"]
     volumes:
@@ -61,8 +64,6 @@ services:
       - "8080:8080"
     depends_on:
       - postgres
-      - redis
-      - otel-collector
 
   pdp:
     build:
@@ -78,8 +79,6 @@ services:
       - "8081:8081"
     depends_on:
       - postgres
-      - redis
-      - otel-collector
 
   pep-gateway:
     build:
@@ -123,6 +122,29 @@ services:
       - pdp
       - postgres
       - otel-collector
+      - mcp-upstream
+
+  pep-:
+    profiles: ["-pep"]
+    build:
+      context: ..
+      dockerfile: services/pep-/Dockerfile
+    environment:
+      PEP_MODE: observe
+      PDP_URL: http://pdp:8081
+      CONTROLPLANE_API_URL: http://controlplane-api:8080
+      MCP_UPSTREAM_URL: http://mcp-upstream:8090/mcp
+      MCP_TENANT_ID: 00000000-0000-0000-0000-000000000001
+      MCP_ACTOR_ID: user-1
+      MCP_ACTOR_TYPE: agent
+      MCP_ACTOR_ROLES: developer
+      MCP_SERVER_NAME: demo.mcp
+      PORT: "8084"
+    ports:
+      - "8084:8084"
+    depends_on:
+      - pdp
+      - controlplane-api
       - mcp-upstream
 
   ui:

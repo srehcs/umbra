@@ -21,6 +21,7 @@ export default function ToolsPage() {
   const [items, setItems] = React.useState<Tool[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const refreshControllerRef = React.useRef<AbortController | null>(null);
   const { hasRole } = useAuth();
   const canManageTools = hasRole("tool_admin");
 
@@ -43,13 +44,19 @@ export default function ToolsPage() {
   }
 
   function handleRefresh() {
-    void refresh();
+    refreshControllerRef.current?.abort();
+    const controller = new AbortController();
+    refreshControllerRef.current = controller;
+    void refresh(controller.signal);
   }
 
   React.useEffect(() => {
     const controller = new AbortController();
     refresh(controller.signal);
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      refreshControllerRef.current?.abort();
+    };
   }, []);
 
   async function create() {

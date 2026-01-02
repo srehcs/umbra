@@ -11,6 +11,7 @@ import type {
   SimulateResponse,
   Tool,
 } from "./types";
+import { ReceiptListSchema } from "./types";
 
 const BASE_URL = "/api/controlplane";
 const TENANT_KEY = "umbra.tenant_id";
@@ -45,7 +46,8 @@ export const api = {
   listTools: async (signal?: AbortSignal): Promise<{ items: Tool[] }> => {
     const result = await getClient().GET("/v1/tools", signal ? { signal } : {});
     const data = await unwrap<ToolList>(result);
-    return { items: (data.items ?? []) as Tool[] };
+    const items: Tool[] = data.items ?? [];
+    return { items };
   },
   createTool: async (body: CreateToolRequest): Promise<{ id: string }> => {
     const result = await getClient().POST("/v1/tools", { body });
@@ -57,7 +59,8 @@ export const api = {
   listPolicies: async (signal?: AbortSignal): Promise<{ items: PolicyRow[] }> => {
     const result = await getClient().GET("/v1/policies", signal ? { signal } : {});
     const data = await unwrap<PolicyList>(result);
-    return { items: (data.items ?? []) as PolicyRow[] };
+    const items: PolicyRow[] = data.items ?? [];
+    return { items };
   },
   createPolicy: async (body: CreatePolicyRequest): Promise<{ id: string }> => {
     const result = await getClient().POST("/v1/policies", { body });
@@ -74,7 +77,7 @@ export const api = {
       const text = await res.text().catch(() => "");
       throw new Error(text || `HTTP ${res.status}`);
     }
-    const data = (await res.json()) as PolicyRow;
+    const data: PolicyRow = await res.json();
     return { id: data.id };
   },
   activatePolicy: async (id: string): Promise<{ ok?: boolean }> => {
@@ -83,8 +86,8 @@ export const api = {
     });
     return unwrap(result);
   },
-  getActivePolicy: async (): Promise<ActivePolicyResponse> => {
-    const result = await getClient().GET("/v1/policies/active");
+  getActivePolicy: async (signal?: AbortSignal): Promise<ActivePolicyResponse> => {
+    const result = await getClient().GET("/v1/policies/active", signal ? { signal } : {});
     return unwrap<ActivePolicyResponse>(result);
   },
   simulatePolicyServer: async (body: SimulateRequest): Promise<SimulateResponse> => {
@@ -102,15 +105,23 @@ export const api = {
       ...(signal ? { signal } : {}),
     });
     const data = await unwrap<ReceiptList>(result);
-    const next = data.next_before;
+    const parsed = ReceiptListSchema.safeParse(data);
+    if (!parsed.success) {
+      throw new Error("Invalid receipts response");
+    }
+    const next = parsed.data.next_before;
     return {
-      items: (data.items ?? []) as Receipt[],
+      items: parsed.data.items ?? [],
       ...(next ? { next_before: next } : {}),
     };
   },
-  verifyReceipts: async (params: { kind?: "decision" | "invocation" | "all"; limit?: number } = {}): Promise<ReceiptVerifyResponse> => {
+  verifyReceipts: async (
+    params: { kind?: "decision" | "invocation" | "all"; limit?: number } = {},
+    signal?: AbortSignal,
+  ): Promise<ReceiptVerifyResponse> => {
     const result = await getClient().POST("/v1/receipts/verify", {
       params: { query: params },
+      ...(signal ? { signal } : {}),
     });
     return unwrap<ReceiptVerifyResponse>(result);
   },

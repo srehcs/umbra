@@ -9,6 +9,10 @@ module.exports = defineConfig({
   retries: 0,
   use: {
     baseURL,
+    launchOptions: {
+      headless: true,
+      args: ["--headless=new"],
+    },
     trace: "retain-on-failure",
   },
 });

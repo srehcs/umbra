@@ -48,6 +48,8 @@ export default function ReceiptsPage() {
     kind: string;
     failure?: { receipt_id: string; code: string };
   } | null>(null);
+  const verifyControllerRef = React.useRef<AbortController | null>(null);
+  const refreshControllerRef = React.useRef<AbortController | null>(null);
   const [verifyError, setVerifyError] = React.useState<string | null>(null);
   const [verifyLoading, setVerifyLoading] = React.useState(false);
   const verifyEnabled = process.env.NEXT_PUBLIC_RECEIPTS_VERIFY_ENABLED === "true";
@@ -105,6 +107,12 @@ export default function ReceiptsPage() {
     }
     setSelectedJSON(JSON.stringify(selected, null, 2));
   }, [selected]);
+  React.useEffect(() => {
+    return () => {
+      verifyControllerRef.current?.abort();
+      refreshControllerRef.current?.abort();
+    };
+  }, []);
 
   async function runVerify() {
     if (!canViewReceipts) return;
@@ -113,12 +121,18 @@ export default function ReceiptsPage() {
     setVerifyResult(null);
     setVerifyLoading(true);
     try {
-      const res = await api.verifyReceipts({ kind: "all", limit: 100 });
+      verifyControllerRef.current?.abort();
+      const controller = new AbortController();
+      verifyControllerRef.current = controller;
+      const res = await api.verifyReceipts({ kind: "all", limit: 100 }, controller.signal);
       setVerifyResult(res);
     } catch (e: unknown) {
+      if (verifyControllerRef.current?.signal.aborted) return;
       setVerifyError(e instanceof Error ? e.message : "Verification failed");
     } finally {
-      setVerifyLoading(false);
+      if (!verifyControllerRef.current?.signal.aborted) {
+        setVerifyLoading(false);
+      }
     }
   }
 
@@ -195,7 +209,18 @@ export default function ReceiptsPage() {
                 {verifyLoading ? "Verifying…" : "Verify integrity"}
               </Button>
             )}
-            <Button variant="secondary" onClick={() => load(true)} disabled={loading}>Refresh</Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                refreshControllerRef.current?.abort();
+                const controller = new AbortController();
+                refreshControllerRef.current = controller;
+                load(true, controller.signal);
+              }}
+              disabled={loading}
+            >
+              Refresh
+            </Button>
           </>
         )}
       />
@@ -315,7 +340,16 @@ export default function ReceiptsPage() {
                   <TableCell className="text-right">
                     <Dialog>
                       <DialogTrigger asChild>
-                        <Button size="sm" variant="outline" onClick={() => setSelected(r)}>View</Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setSelected(r);
+                            setSelectedJSON(JSON.stringify(r, null, 2));
+                          }}
+                        >
+                          View
+                        </Button>
                       </DialogTrigger>
                       <DialogContent className="max-w-4xl">
                         <DialogHeader>
@@ -335,14 +369,14 @@ export default function ReceiptsPage() {
                         <div className="mt-4">
                           <div className="mb-2 text-xs text-muted-foreground">Raw JSON</div>
                           <pre className="code text-xs bg-muted p-4 rounded-md overflow-auto max-h-[45vh]">
-{selectedJSON || JSON.stringify(r, null, 2)}
+{selectedJSON}
                           </pre>
                         </div>
 
                         <DialogFooter>
                           <Button
                             variant="secondary"
-                            onClick={() => navigator.clipboard.writeText(selectedJSON || JSON.stringify(r, null, 2))}
+                            onClick={() => navigator.clipboard.writeText(selectedJSON)}
                           >
                             Copy JSON
                           </Button>
