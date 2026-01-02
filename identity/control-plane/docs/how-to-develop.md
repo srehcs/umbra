@@ -18,6 +18,55 @@ Set `NEXT_PUBLIC_TENANT_ID` before starting the UI so the console auto-selects a
 export NEXT_PUBLIC_TENANT_ID="<tenant-id-from-seed>"
 ```
 
+Optional: dev auth roles for UI gating
+Set roles and user for local testing (client-side only):
+```bash
+export NEXT_PUBLIC_DEV_ROLES="policy_admin,tool_admin,auditor"
+export NEXT_PUBLIC_DEV_USER="dev-user"
+```
+You can also override roles in the browser with:
+```js
+localStorage.setItem("umbra.roles", "policy_admin,tool_admin,auditor");
+```
+
+Optional: auth session headers (when AUTH_ENABLED=true)
+If you front the UI with an auth proxy, forward:
+- `x-umbra-user`
+- `x-umbra-roles` (comma-separated)
+- `x-umbra-tenant-id`
+
+Enable auth session mode (UI reads `/api/auth/session`):
+```bash
+export AUTH_ENABLED=true
+export NEXT_PUBLIC_AUTH_ENABLED=true
+```
+
+Example: header-based session fetch
+```bash
+curl -s \
+  -H "x-umbra-user: alice" \
+  -H "x-umbra-roles: policy_admin,tool_admin,auditor" \
+  -H "x-umbra-tenant-id: <tenant-id>" \
+  http://localhost:3000/api/auth/session | jq .
+```
+
+E2E smoke tests
+```bash
+make e2e
+```
+Prereqs:
+- Node 20.x LTS (20.11+ recommended) for Playwright stability.
+- Run `pnpm -C ui exec playwright install` once to download browsers.
+
+Faster options:
+```bash
+make e2e-fast  # reuse existing images (skip docker --build)
+make e2e-local # assumes stack already running, skips docker compose up
+```
+Defaults:
+- `E2E_TENANT_ID=11111111-1111-1111-1111-111111111111`
+- `E2E_ROLES=policy_admin,tool_admin,auditor`
+
 Stopping the stack
 ```bash
 docker compose -f deployments/docker-compose.yml down

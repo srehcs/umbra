@@ -229,6 +229,38 @@ func TestPolicyHashConsistency(t *testing.T) {
 	}
 }
 
+func TestValidateReceiptIngestMissingFields(t *testing.T) {
+	req := receiptIngestRequest{
+		Kind:      "decision",
+		RequestID: "",
+		Body:      json.RawMessage(`{}`),
+	}
+	errs := validateReceiptIngest(req)
+	if len(errs) == 0 {
+		t.Fatal("expected validation errors")
+	}
+	hasField := func(name string) bool {
+		for _, err := range errs {
+			if err.Field == name {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasField("request_id") {
+		t.Fatalf("expected request_id error, got %#v", errs)
+	}
+	if !hasField("decision_id") {
+		t.Fatalf("expected decision_id error, got %#v", errs)
+	}
+	if !hasField("policy_hash") {
+		t.Fatalf("expected policy_hash error, got %#v", errs)
+	}
+	if !hasField("decision") {
+		t.Fatalf("expected decision error, got %#v", errs)
+	}
+}
+
 func TestHandleSimulatePolicy_WithValidPolicy(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	server := &Server{Logger: logger, Store: nil}

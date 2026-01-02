@@ -4,21 +4,25 @@ import * as React from "react";
 import type { Tool } from "@/lib/types";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import PageHeader from "@/components/app/page-header";
+import EmptyState from "@/components/app/empty-state";
+import SectionHeader from "@/components/app/section-header";
+import StatusBanner from "@/components/app/status-banner";
 import { Plus } from "lucide-react";
-
-
+import { useAuth } from "@/lib/auth";
 export default function ToolsPage() {
   const [items, setItems] = React.useState<Tool[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const { hasRole } = useAuth();
+  const canManageTools = hasRole("tool_admin");
 
   const [name, setName] = React.useState("sample-http-tool");
   const [kind, setKind] = React.useState("http");
@@ -50,6 +54,10 @@ export default function ToolsPage() {
 
   async function create() {
     setError(null);
+    if (!canManageTools) {
+      setError("Requires role: tool_admin");
+      return;
+    }
     let parsed: Record<string, unknown> = {};
     try { parsed = JSON.parse(config); } catch { setError("Config must be valid JSON"); return; }
     try {
@@ -64,61 +72,80 @@ export default function ToolsPage() {
     <div className="space-y-6">
       {/* Development mode banner */}
       
-      <div className="flex items-end justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Tools</h1>
-          <p className="text-sm text-muted-foreground">Register tool surfaces and upstream config (tenant-scoped).</p>
-        </div>
+      <PageHeader
+        title="Tools"
+        subtitle="Register tool surfaces and upstream config (tenant-scoped)."
+        actions={(
+          canManageTools ? (
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button data-testid="tool-new">
+                  <Plus className="h-4 w-4 mr-2" /> New tool
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Create tool</DialogTitle>
+                <DialogDescription>V0 supports kinds: http, mcp, cli. Start with http.</DialogDescription>
+              </DialogHeader>
 
-        <Dialog>
-          <DialogTrigger asChild>
-            <Button><Plus className="h-4 w-4 mr-2" /> New tool</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Create tool</DialogTitle>
-              <DialogDescription>V0 supports kinds: http, mcp, cli. Start with http.</DialogDescription>
-            </DialogHeader>
-
-            <div className="space-y-3">
-              <div className="space-y-2">
-                <Label>Name</Label>
-                <Input value={name} onChange={(e) => setName(e.target.value)} />
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label>Name</Label>
+                  <Input value={name} onChange={(e) => setName(e.target.value)} data-testid="tool-name" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Kind</Label>
+                  <Input value={kind} onChange={(e) => setKind(e.target.value)} data-testid="tool-kind" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Config (JSON)</Label>
+                  <Textarea value={config} onChange={(e) => setConfig(e.target.value)} data-testid="tool-config" />
+                </div>
+                {error && <div className="text-sm text-red-700">{error}</div>}
               </div>
-              <div className="space-y-2">
-                <Label>Kind</Label>
-                <Input value={kind} onChange={(e) => setKind(e.target.value)} />
-              </div>
-              <div className="space-y-2">
-                <Label>Config (JSON)</Label>
-                <Textarea value={config} onChange={(e) => setConfig(e.target.value)} />
-              </div>
-              {error && <div className="text-sm text-red-700">{error}</div>}
-            </div>
 
-            <DialogFooter>
-              <Button variant="secondary" onClick={handleRefresh} disabled={loading}>Refresh</Button>
-              <Button onClick={create}>Create</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </div>
+              <DialogFooter>
+                <Button variant="secondary" onClick={handleRefresh} disabled={loading}>Refresh</Button>
+                <Button onClick={create} data-testid="tool-create">Create</Button>
+              </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          ) : (
+            <Button disabled title="Requires role: tool_admin" data-testid="tool-new">
+              <Plus className="h-4 w-4 mr-2" /> New tool
+            </Button>
+          )
+        )}
+      />
 
-      <Alert>
-        <AlertTitle>Development mode</AlertTitle>
-        <AlertDescription>Tools are tenant-scoped via header. Production will enforce tool admin roles via OIDC claims.</AlertDescription>
-      </Alert>
+      <StatusBanner
+        title="Development mode"
+        description="Tools are tenant-scoped via header. Production will enforce tool admin roles via OIDC claims."
+      />
+      {!canManageTools && (
+        <StatusBanner
+          title="Role required"
+          description="Tool creation is limited to tool_admin."
+          variant="destructive"
+        />
+      )}
 
       <Card>
-        <CardHeader>
-          <CardTitle>Registered tools</CardTitle>
-          <CardDescription>
-            {loading ? "Loading…" : `${items.length} tool(s)`}
-          </CardDescription>
-        </CardHeader>
+        <SectionHeader
+          title="Registered tools"
+          description={loading ? "Loading…" : `${items.length} tool(s)`}
+        />
         <CardContent>
-          {error && <div className="mb-3 text-sm text-red-700">{error}</div>}
-          <Table>
+          {error && (
+            <StatusBanner
+              className="mb-3"
+              title="Load failed"
+              description={error}
+              variant="destructive"
+            />
+          )}
+          <Table data-testid="tools-table">
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
@@ -128,7 +155,7 @@ export default function ToolsPage() {
             </TableHeader>
             <TableBody>
               {items.map((t: Tool) => (
-                <TableRow key={t.id}>
+                <TableRow key={t.id} data-testid="tools-row">
                   <TableCell className="font-medium">{t.name}</TableCell>
                   <TableCell><Badge variant="outline">{t.kind}</Badge></TableCell>
                   <TableCell className="code text-xs text-muted-foreground">{t.id}</TableCell>
@@ -136,8 +163,8 @@ export default function ToolsPage() {
               ))}
               {items.length === 0 && !loading && (
                 <TableRow>
-                  <TableCell colSpan={3} className="text-sm text-muted-foreground">
-                    No tools yet. Create one.
+                  <TableCell colSpan={3}>
+                    <EmptyState message="No tools yet. Create one." />
                   </TableCell>
                 </TableRow>
               )}
