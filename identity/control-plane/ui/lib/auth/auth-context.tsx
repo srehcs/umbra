@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { z } from "zod";
 
 type AuthUser = {
   id: string;
@@ -23,11 +24,12 @@ const DEFAULT_ROLES = ["developer", "tool_admin", "policy_admin", "auditor"];
 
 const AuthContext = React.createContext<AuthContextValue | null>(null);
 
-type SessionResponse = {
-  user?: AuthUser | null;
-  roles?: string[];
-  tenant_id?: string;
-};
+const SessionResponseSchema = z.object({
+  user: z.object({ id: z.string(), name: z.string().optional() }).nullable().optional(),
+  roles: z.array(z.string()).optional(),
+  tenant_id: z.string().optional(),
+});
+type SessionResponse = z.infer<typeof SessionResponseSchema>;
 
 function parseRoles(input?: string | null): string[] {
   if (!input) return [];
@@ -84,14 +86,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(resolveUser(enabled));
       setTenantId(resolveTenant());
     };
-    const refreshSession = async () => {
+    const refreshSession = async (signal?: AbortSignal) => {
       try {
-        const res = await fetch("/api/auth/session");
+        const res = await fetch("/api/auth/session", signal ? { signal } : undefined);
         if (!res.ok) return;
-        const data = (await res.json()) as SessionResponse;
+        const json = await res.json();
+        const parsed = SessionResponseSchema.safeParse(json);
+        if (!parsed.success) return;
+        const data: SessionResponse = parsed.data;
         if (cancelled) return;
         setRoles(data.roles ?? []);
-        setUser(data.user ?? null);
+        const normalizedUser = data.user
+          ? {
+              id: data.user.id,
+              ...(data.user.name ? { name: data.user.name } : {}),
+            }
+          : null;
+        setUser(normalizedUser);
         setTenantId(data.tenant_id);
       } catch {
         if (!cancelled) {
@@ -103,11 +114,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
 
     if (enabled) {
-      void refreshSession();
-      const focusHandler = () => refreshSession();
+      const controller = new AbortController();
+      void refreshSession(controller.signal);
+      const focusHandler = () => refreshSession(controller.signal);
       window.addEventListener("focus", focusHandler);
       return () => {
         cancelled = true;
+        controller.abort();
         window.removeEventListener("focus", focusHandler);
       };
     }

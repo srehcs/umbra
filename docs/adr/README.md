@@ -23,3 +23,5 @@ This directory is the single source of truth for architectural decisions across 
 - `0008-pep-integration-pattern.md` — PEP integration pattern (HTTP proxy / ext_authz)
 - `0009-identity-provider-claims-model.md` — Identity provider choice and claims model
 - `0010-typed-api-contracts-and-e2e.md` — Typed OpenAPI contracts and E2E harness
+- `0011-optional-rust-pep-compose-profile.md` — Optional Rust PEP via Docker Compose profile
+- `0012-minimal-dev-stack-target.md` — Minimal dev stack target (make dev-min)

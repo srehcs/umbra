@@ -591,12 +591,20 @@ func (s *Store) ExportReceiptsCSV(ctx context.Context, tenant uuid.UUID, f Expor
 	WriteReceiptsCSVHeader(writer)
 
 	if f.ActorID != "" {
-		decisions, err := s.exportDecisionReceipts(ctx, tenant, f)
+		rows, err := s.exportDecisionReceiptsRows(ctx, tenant, f)
 		if err != nil {
 			return err
 		}
-		for _, record := range decisions {
+		defer rows.Close()
+		for rows.Next() {
+			record, err := scanDecisionExportRow(rows)
+			if err != nil {
+				return err
+			}
 			WriteReceiptsCSVRecord(writer, record)
+		}
+		if err := rows.Err(); err != nil {
+			return err
 		}
 		writer.Flush()
 		return writer.Error()
@@ -622,6 +630,33 @@ func (s *Store) ExportReceiptsCSV(ctx context.Context, tenant uuid.UUID, f Expor
 	return writer.Error()
 }
 
+func (s *Store) ExportReceiptsJSON(ctx context.Context, tenant uuid.UUID, f ExportFilters, w io.Writer) error {
+	if f.Limit <= 0 || f.Limit > 500 {
+		f.Limit = 100
+	}
+	f.ActorID = strings.TrimSpace(f.ActorID)
+	f.Tool = strings.TrimSpace(f.Tool)
+	f.Decision = strings.ToLower(strings.TrimSpace(f.Decision))
+	f.RequestID = strings.TrimSpace(f.RequestID)
+	f.DecisionID = strings.TrimSpace(f.DecisionID)
+
+	if f.ActorID != "" {
+		rows, err := s.exportDecisionReceiptsRows(ctx, tenant, f)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		return writeReceiptsJSONStream(rows, scanDecisionExportRow, w)
+	}
+
+	rows, err := s.exportReceiptsUnionRows(ctx, tenant, f)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	return writeReceiptsJSONStream(rows, scanExportUnionRow, w)
+}
+
 func (s *Store) ExportReceipts(ctx context.Context, tenant uuid.UUID, f ExportFilters) ([]ExportRecord, error) {
 	if f.Limit <= 0 || f.Limit > 500 {
 		f.Limit = 100
@@ -641,6 +676,59 @@ func (s *Store) ExportReceipts(ctx context.Context, tenant uuid.UUID, f ExportFi
 	}
 
 	return s.exportReceiptsUnion(ctx, tenant, f)
+}
+
+func (s *Store) exportDecisionReceiptsRows(ctx context.Context, tenant uuid.UUID, f ExportFilters) (pgx.Rows, error) {
+	args := []interface{}{tenant}
+	idx := 2
+	where := " WHERE tenant_id=$1 "
+	if f.From != nil {
+		where += " AND ts >= $" + itoa(idx)
+		args = append(args, *f.From)
+		idx++
+	}
+	if f.To != nil {
+		where += " AND ts <= $" + itoa(idx)
+		args = append(args, *f.To)
+		idx++
+	}
+	if f.ActorID != "" {
+		where += " AND body_json->'actor'->>'id' = $" + itoa(idx)
+		args = append(args, f.ActorID)
+		idx++
+	}
+	if f.Tool != "" {
+		where += " AND body_json->'tool'->>'name' = $" + itoa(idx)
+		args = append(args, f.Tool)
+		idx++
+	}
+	if f.Decision != "" {
+		where += " AND decision = $" + itoa(idx)
+		args = append(args, f.Decision)
+		idx++
+	}
+	if f.RequestID != "" {
+		where += " AND request_id = $" + itoa(idx)
+		args = append(args, f.RequestID)
+		idx++
+	}
+	if f.DecisionID != "" {
+		where += " AND decision_id = $" + itoa(idx)
+		args = append(args, f.DecisionID)
+		idx++
+	}
+
+	args = append(args, f.Limit)
+	sql := `
+    SELECT ts, decision_id, request_id, trace_id, policy_hash, decision, hash, prev_hash,
+      body_json->'actor'->>'id' AS actor_id,
+      body_json->'tool'->>'name' AS tool_name,
+      NULLIF(body_json->>'policy_version','')::int AS policy_version
+    FROM receipts_decision` + where + `
+    ORDER BY ts DESC
+    LIMIT $` + itoa(idx)
+
+	return s.db.Query(ctx, sql, args...)
 }
 
 func (s *Store) exportDecisionReceipts(ctx context.Context, tenant uuid.UUID, f ExportFilters) ([]ExportRecord, error) {
@@ -701,33 +789,9 @@ func (s *Store) exportDecisionReceipts(ctx context.Context, tenant uuid.UUID, f 
 
 	out := []ExportRecord{}
 	for rows.Next() {
-		var ts time.Time
-		var decisionID, requestID, traceID, policyHash, decision string
-		var hash string
-		var prev *string
-		var actorID, toolName *string
-		var policyVersion *int
-		if err := rows.Scan(&ts, &decisionID, &requestID, &traceID, &policyHash, &decision, &hash, &prev, &actorID, &toolName, &policyVersion); err != nil {
+		record, err := scanDecisionExportRow(rows)
+		if err != nil {
 			return nil, err
-		}
-		record := ExportRecord{
-			SchemaVersion:   "v1",
-			Kind:            "decision",
-			TS:              ts,
-			RequestID:       requestID,
-			DecisionID:      decisionID,
-			TraceID:         traceID,
-			PolicyHash:      policyHash,
-			PolicyVersion:   policyVersion,
-			Decision:        decision,
-			ReceiptHash:     hash,
-			ReceiptPrevHash: derefString(prev),
-		}
-		if actorID != nil {
-			record.ActorID = *actorID
-		}
-		if toolName != nil {
-			record.ToolName = *toolName
 		}
 		out = append(out, record)
 	}
@@ -995,6 +1059,69 @@ func scanExportUnionRow(rows pgx.Rows) (ExportRecord, error) {
 	record.StatusCode = statusCode
 
 	return record, nil
+}
+
+func scanDecisionExportRow(rows pgx.Rows) (ExportRecord, error) {
+	var ts time.Time
+	var decisionID, requestID, traceID, policyHash, decision string
+	var hash string
+	var prev *string
+	var actorID, toolName *string
+	var policyVersion *int
+	if err := rows.Scan(&ts, &decisionID, &requestID, &traceID, &policyHash, &decision, &hash, &prev, &actorID, &toolName, &policyVersion); err != nil {
+		return ExportRecord{}, err
+	}
+	record := ExportRecord{
+		SchemaVersion:   "v1",
+		Kind:            "decision",
+		TS:              ts,
+		RequestID:       requestID,
+		DecisionID:      decisionID,
+		TraceID:         traceID,
+		PolicyHash:      policyHash,
+		PolicyVersion:   policyVersion,
+		Decision:        decision,
+		ReceiptHash:     hash,
+		ReceiptPrevHash: derefString(prev),
+	}
+	if actorID != nil {
+		record.ActorID = *actorID
+	}
+	if toolName != nil {
+		record.ToolName = *toolName
+	}
+	return record, nil
+}
+
+func writeReceiptsJSONStream(rows pgx.Rows, scan func(pgx.Rows) (ExportRecord, error), w io.Writer) error {
+	if _, err := io.WriteString(w, `{"schema_version":"v1","items":[`); err != nil {
+		return err
+	}
+	first := true
+	for rows.Next() {
+		record, err := scan(rows)
+		if err != nil {
+			return err
+		}
+		data, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		if !first {
+			if _, err := io.WriteString(w, ","); err != nil {
+				return err
+			}
+		}
+		first = false
+		if _, err := w.Write(data); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err := io.WriteString(w, "]}")
+	return err
 }
 
 func buildDecisionWhere(tenant uuid.UUID, start int, f ExportFilters) (string, []interface{}, int) {

@@ -875,16 +875,10 @@ func (s *Server) handleReceiptsExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, err := s.Store.ExportReceipts(ctx, tenant, filters)
-	if err != nil {
+	w.Header().Set("content-type", "application/json")
+	if err := s.Store.ExportReceiptsJSON(ctx, tenant, filters, w); err != nil {
 		http.Error(w, "db error", 500)
-		return
 	}
-
-	writeJSON(w, map[string]interface{}{
-		"schema_version": "v1",
-		"items":          items,
-	})
 }
 
 func (s *Server) handleReceiptsVerify(w http.ResponseWriter, r *http.Request) {

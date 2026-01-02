@@ -38,7 +38,9 @@ wait_for_http() {
 wait_for_postgres
 wait_for_http "http://localhost:8080/healthz" "controlplane-api"
 wait_for_http "http://localhost:8081/healthz" "pdp"
-wait_for_http "http://localhost:8082/healthz" "pep-gateway"
+if [ "${SKIP_PEP_WAIT:-}" != "1" ]; then
+  wait_for_http "http://localhost:8082/healthz" "pep-gateway"
+fi
 
 # UI may take a bit more depending on build; check it but don't fail the overall startup if UI not ready yet
 if curl -sSf "http://localhost:3000" >/dev/null 2>&1; then
@@ -52,6 +54,10 @@ echo "\n[wait] Local endpoints:"
 echo "UI:  http://localhost:3000"
 echo "API: http://localhost:8080"
 echo "PDP: http://localhost:8081"
-echo "PEP: http://localhost:8082"
+if [ "${SKIP_PEP_WAIT:-}" != "1" ]; then
+  echo "PEP: http://localhost:8082"
+else
+  echo "PEP: not started (dev-min)"
+fi
 
 echo "[wait] Services appear to be ready"
