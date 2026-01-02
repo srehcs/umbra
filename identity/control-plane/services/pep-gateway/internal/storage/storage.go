@@ -52,8 +52,8 @@ func (s *Store) InsertInvocationReceipt(ctx context.Context,
 	spanID string,
 ) error {
 	_, err := s.db.Exec(ctx, `
-    INSERT INTO receipts_invocation(tenant_id, decision_id, request_id, tool_name, method, path, outcome, status_code, latency_ms, body_json, prev_hash, hash, trace_id, span_id)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+    INSERT INTO receipts_invocation(tenant_id, decision_id, request_id, tool_name, method, path, outcome, status_code, latency_ms, body_json, body_canonical, prev_hash, hash, trace_id, span_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
 		tenant,
 		decisionID,
 		nullIfEmpty(requestID),
@@ -63,6 +63,7 @@ func (s *Store) InsertInvocationReceipt(ctx context.Context,
 		outcome,
 		statusCode,
 		latencyMs,
+		body,
 		body,
 		nullIfEmpty(prevHash),
 		hash,

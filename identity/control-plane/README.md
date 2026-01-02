@@ -42,6 +42,7 @@ Open:
 
 Demo script:
 - `docs/runbooks/demo.md`
+- `docs/runbooks/security_demo.md`
 - PDP unavailable runbook: `docs/runbooks/pdp_unavailable.md`
 - Examples: `docs/examples/`
 
@@ -52,6 +53,7 @@ Demo script:
 Start here:
 - `docs/00_exec_summary.md`
 - `docs/runbooks/demo.md`
+- `docs/runbooks/security_demo.md`
 - `docs/runbooks/pdp_unavailable.md`
 
 Engineering rules (umbrella-level):
@@ -74,8 +76,3 @@ See `docs/api/openapi.yaml` for the full contract.
 - UI: `pnpm lint` (run from `identity/control-plane/ui`)
 
 ---
-
-## Technical details (legacy)
-
-We keep the original technical README here:
-- `README.legacy.md`
