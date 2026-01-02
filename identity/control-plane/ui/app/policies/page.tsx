@@ -34,6 +34,7 @@ export default function PoliciesPage() {
   const [items, setItems] = React.useState<PolicyRow[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const refreshControllerRef = React.useRef<AbortController | null>(null);
   const { hasRole } = useAuth();
   const canManagePolicies = hasRole("policy_admin");
 
@@ -75,7 +76,7 @@ export default function PoliciesPage() {
       const data = await api.listPolicies(signal);
       setItems(data.items ?? []);
       try {
-        const active = await api.getActivePolicy();
+        const active = await api.getActivePolicy(signal);
         setActivePolicy(active);
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : "";
@@ -94,13 +95,19 @@ export default function PoliciesPage() {
   }
 
   function handleRefresh() {
-    void refresh();
+    refreshControllerRef.current?.abort();
+    const controller = new AbortController();
+    refreshControllerRef.current = controller;
+    void refresh(controller.signal);
   }
 
   React.useEffect(() => {
     const controller = new AbortController();
     refresh(controller.signal);
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      refreshControllerRef.current?.abort();
+    };
   }, []);
 
   function validateOnly(): boolean {
@@ -129,9 +136,9 @@ export default function PoliciesPage() {
     const ok = validateOnly();
     if (!ok) return;
 
-    const parsed: unknown = JSON.parse(policy);
+    const parsed = PolicySchema.parse(JSON.parse(policy));
     try {
-      await api.createPolicy({ name, policy: parsed as Record<string, unknown> });
+      await api.createPolicy({ name, policy: parsed });
       await refresh();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Create failed");
@@ -213,9 +220,9 @@ export default function PoliciesPage() {
     }
     const ok = validateEdit();
     if (!ok) return;
-    const parsed: unknown = JSON.parse(editPolicy);
+    const parsed = PolicySchema.parse(JSON.parse(editPolicy));
     try {
-      await api.updatePolicy(editing.id, { policy: parsed as Record<string, unknown> });
+      await api.updatePolicy(editing.id, { policy: parsed });
       setEditOpen(false);
       setEditing(null);
       await refresh();

@@ -121,9 +121,10 @@ func TestReceiptExportFiltersAndSafety(t *testing.T) {
 	decisionDenyID := uuid.New()
 
 	_, err = db.Pool.Exec(ctx, `
-    INSERT INTO receipts_decision(tenant_id, ts, decision_id, policy_hash, decision, body_json, prev_hash, hash, trace_id, span_id, request_id)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    INSERT INTO receipts_decision(tenant_id, ts, decision_id, policy_hash, decision, body_json, body_canonical, prev_hash, hash, trace_id, span_id, request_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 		tenantID, tsAllow, decisionAllowID, "policy-hash-allow", "allow",
+		json.RawMessage(`{"actor":{"id":"user-1"},"tool":{"name":"tool.alpha"},"policy_version":1,"secret":"dont-export"}`),
 		json.RawMessage(`{"actor":{"id":"user-1"},"tool":{"name":"tool.alpha"},"policy_version":1,"secret":"dont-export"}`),
 		nil, "hash-allow", "trace-allow", "span-allow", "req-allow",
 	)
@@ -131,9 +132,10 @@ func TestReceiptExportFiltersAndSafety(t *testing.T) {
 		t.Fatalf("insert allow decision receipt failed: %v", err)
 	}
 	_, err = db.Pool.Exec(ctx, `
-    INSERT INTO receipts_decision(tenant_id, ts, decision_id, policy_hash, decision, body_json, prev_hash, hash, trace_id, span_id, request_id)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    INSERT INTO receipts_decision(tenant_id, ts, decision_id, policy_hash, decision, body_json, body_canonical, prev_hash, hash, trace_id, span_id, request_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 		tenantID, tsDeny, decisionDenyID, "policy-hash-deny", "deny",
+		json.RawMessage(`{"actor":{"id":"user-2"},"tool":{"name":"tool.beta"},"policy_version":1,"secret":"dont-export"}`),
 		json.RawMessage(`{"actor":{"id":"user-2"},"tool":{"name":"tool.beta"},"policy_version":1,"secret":"dont-export"}`),
 		"prev-hash", "hash-deny", "trace-deny", "span-deny", "req-deny",
 	)
@@ -142,9 +144,10 @@ func TestReceiptExportFiltersAndSafety(t *testing.T) {
 	}
 
 	_, err = db.Pool.Exec(ctx, `
-    INSERT INTO receipts_invocation(tenant_id, ts, decision_id, tool_name, method, path, outcome, status_code, latency_ms, body_json, prev_hash, hash, trace_id, span_id, request_id)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+    INSERT INTO receipts_invocation(tenant_id, ts, decision_id, tool_name, method, path, outcome, status_code, latency_ms, body_json, body_canonical, prev_hash, hash, trace_id, span_id, request_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
 		tenantID, tsAllow, decisionAllowID, "tool.alpha", "GET", "/demo", "error", 502, 42,
+		json.RawMessage(`{"policy_hash":"policy-hash-allow","policy_version":1,"secret":"dont-export"}`),
 		json.RawMessage(`{"policy_hash":"policy-hash-allow","policy_version":1,"secret":"dont-export"}`),
 		nil, "hash-inv", "trace-inv", "span-inv", "req-allow",
 	)

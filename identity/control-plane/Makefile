@@ -1,8 +1,16 @@
 SHELL := /bin/bash
 
 COMPOSE := docker compose -f deployments/docker-compose.yml
+COMPOSE_PROFILES ?= obs
 
-.PHONY: bootstrap fmt lint test gen up down logs dev seed docker-build verify migrate receipts-verify e2e-setup e2e e2e-fast e2e-local
+DEV_RUST_PROFILES := $(COMPOSE_PROFILES)
+ifneq ($(strip $(DEV_RUST_PROFILES)),)
+DEV_RUST_PROFILES := $(DEV_RUST_PROFILES),-pep
+else
+DEV_RUST_PROFILES := -pep
+endif
+
+.PHONY: bootstrap fmt lint test gen up down logs dev dev-min dev- seed docker-build verify migrate receipts-verify e2e-setup e2e e2e-fast e2e-local
 
 bootstrap:
 	@echo "Bootstrap: go mod tidy (optional) + ui deps"
@@ -39,7 +47,7 @@ seed:
 # Start local stack, wait for readiness, seed the DB, and print endpoints
 dev:
 	@mkdir -p ./local/.data/postgres
-	$(COMPOSE) up -d --build
+	@COMPOSE_PROFILES=$(COMPOSE_PROFILES) $(COMPOSE) up -d --build
 	@bash scripts/dev/wait_for_services.sh
 	@bash scripts/dev/seed_db.sh
 	@echo "\nLocal endpoints:"
@@ -47,6 +55,30 @@ dev:
 	@echo "API: http://localhost:8080"
 	@echo "PDP: http://localhost:8081"
 	@echo "PEP: http://localhost:8082"
+
+# Start minimal stack (UI + API + PDP + deps) without PEP/MCP services.
+dev-min:
+	@mkdir -p ./local/.data/postgres
+	@COMPOSE_PROFILES= $(COMPOSE) up -d --build controlplane-api pdp ui
+	@SKIP_PEP_WAIT=1 bash scripts/dev/wait_for_services.sh
+	@bash scripts/dev/seed_db.sh
+	@echo "\nLocal endpoints:"
+	@echo "UI:  http://localhost:3000"
+	@echo "API: http://localhost:8080"
+	@echo "PDP: http://localhost:8081"
+
+# Start local stack with optional services enabled (e.g.,  PEP via profiles)
+dev-:
+	@mkdir -p ./local/.data/postgres
+	@COMPOSE_PROFILES=$(DEV_RUST_PROFILES) $(COMPOSE) up -d --build
+	@bash scripts/dev/wait_for_services.sh
+	@bash scripts/dev/seed_db.sh
+	@echo "\nLocal endpoints:"
+	@echo "UI:  http://localhost:3000"
+	@echo "API: http://localhost:8080"
+	@echo "PDP: http://localhost:8081"
+	@echo "PEP: http://localhost:8082"
+	@echo " PEP: http://localhost:8084"
 
 # Check demo readiness (db, api, pdp, tools/policies, receipts)
 .PHONY: demo-check
@@ -62,6 +94,7 @@ migrate:
 	@docker compose -f deployments/docker-compose.yml exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migrations/0003_add_receipt_indexes.sql
 	@docker compose -f deployments/docker-compose.yml exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migrations/0004_add_receipt_search_indexes.sql
 	@docker compose -f deployments/docker-compose.yml exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migrations/0005_add_receipt_search_text.sql
+	@docker compose -f deployments/docker-compose.yml exec -T postgres psql -U umbra -d umbra -v ON_ERROR_STOP=1 -f /migrations/0006_add_receipt_canonical.sql
 
 verify:
 	@bash scripts/dev/verify_local.sh

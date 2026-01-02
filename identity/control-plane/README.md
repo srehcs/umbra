@@ -25,6 +25,10 @@ Evaluates policies and returns **allow/deny** (plus obligations later).
 3) **Enforcement Gate (PEP Gateway)**  
 Intercepts tool calls, asks PDP, blocks or forwards, and always writes a receipt.
 
+Optional:
+4) ** PEP (MCP-first gateway)**  
+Standalone  PEP for low-latency MCP tool-call enforcement and parity testing.
+
 ---
 
 ## Quick start (local)
@@ -32,6 +36,26 @@ Intercepts tool calls, asks PDP, blocks or forwards, and always writes a receipt
 ```bash
 make dev
 make seed
+```
+
+For a minimal stack (UI + API + PDP only):
+
+```bash
+make dev-min
+```
+
+`make dev` enables the `obs` profile by default (Redis + OTel Collector + Jaeger).
+
+To include the  PEP gateway:
+
+```bash
+COMPOSE_PROFILES=-pep make dev
+```
+
+Or use the shortcut target:
+
+```bash
+make dev-
 ```
 
 Open:
@@ -42,6 +66,7 @@ Open:
 
 Demo script:
 - `docs/runbooks/demo.md`
+- `docs/runbooks/security_demo.md`
 - PDP unavailable runbook: `docs/runbooks/pdp_unavailable.md`
 - Examples: `docs/examples/`
 
@@ -52,6 +77,7 @@ Demo script:
 Start here:
 - `docs/00_exec_summary.md`
 - `docs/runbooks/demo.md`
+- `docs/runbooks/security_demo.md`
 - `docs/runbooks/pdp_unavailable.md`
 
 Engineering rules (umbrella-level):
@@ -74,8 +100,3 @@ See `docs/api/openapi.yaml` for the full contract.
 - UI: `pnpm lint` (run from `identity/control-plane/ui`)
 
 ---
-
-## Technical details (legacy)
-
-We keep the original technical README here:
-- `README.legacy.md`
