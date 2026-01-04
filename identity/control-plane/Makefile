@@ -3,14 +3,7 @@ SHELL := /bin/bash
 COMPOSE := docker compose -f deployments/docker-compose.yml
 COMPOSE_PROFILES ?= obs
 
-DEV_RUST_PROFILES := $(COMPOSE_PROFILES)
-ifneq ($(strip $(DEV_RUST_PROFILES)),)
-DEV_RUST_PROFILES := $(DEV_RUST_PROFILES),-pep
-else
-DEV_RUST_PROFILES := -pep
-endif
-
-.PHONY: bootstrap fmt lint test gen up down logs dev dev-min dev- seed docker-build verify migrate receipts-verify e2e-setup e2e e2e-fast e2e-local
+.PHONY: bootstrap fmt lint test gen up down logs dev dev-min seed docker-build verify migrate receipts-verify e2e-setup e2e e2e-fast e2e-local
 
 bootstrap:
 	@echo "Bootstrap: go mod tidy (optional) + ui deps"
@@ -66,19 +59,6 @@ dev-min:
 	@echo "UI:  http://localhost:3000"
 	@echo "API: http://localhost:8080"
 	@echo "PDP: http://localhost:8081"
-
-# Start local stack with optional services enabled (e.g.,  PEP via profiles)
-dev-:
-	@mkdir -p ./local/.data/postgres
-	@COMPOSE_PROFILES=$(DEV_RUST_PROFILES) $(COMPOSE) up -d --build
-	@bash scripts/dev/wait_for_services.sh
-	@bash scripts/dev/seed_db.sh
-	@echo "\nLocal endpoints:"
-	@echo "UI:  http://localhost:3000"
-	@echo "API: http://localhost:8080"
-	@echo "PDP: http://localhost:8081"
-	@echo "PEP: http://localhost:8082"
-	@echo " PEP: http://localhost:8084"
 
 # Check demo readiness (db, api, pdp, tools/policies, receipts)
 .PHONY: demo-check

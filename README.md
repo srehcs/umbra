@@ -30,7 +30,6 @@ Repo path: `identity/control-plane/`
 Core components:
 - UI (Next.js + ShadCN): `identity/control-plane/ui/`
 - Services (Go): `identity/control-plane/services/`
-- Optional  PEP (MCP-first gateway): `identity/control-plane/services/pep-/`
 - Shared packages: `identity/control-plane/packages/`
 - Docs (C4, OpenAPI, threat model): `identity/control-plane/docs/`
 - ADRs (centralized): `docs/adr/`
@@ -64,13 +63,6 @@ make dev-min
 ```
 
 `make dev` enables the `obs` profile by default (Redis + OTel Collector + Jaeger).
-
-To include the  PEP gateway in the local stack:
-
-```bash
-cd identity/control-plane
-COMPOSE_PROFILES=-pep make dev
-```
 
 Then open:
 - UI: http://localhost:3000

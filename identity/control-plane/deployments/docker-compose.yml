@@ -124,29 +124,6 @@ services:
       - otel-collector
       - mcp-upstream
 
-  pep-:
-    profiles: ["-pep"]
-    build:
-      context: ..
-      dockerfile: services/pep-/Dockerfile
-    environment:
-      PEP_MODE: observe
-      PDP_URL: http://pdp:8081
-      CONTROLPLANE_API_URL: http://controlplane-api:8080
-      MCP_UPSTREAM_URL: http://mcp-upstream:8090/mcp
-      MCP_TENANT_ID: 00000000-0000-0000-0000-000000000001
-      MCP_ACTOR_ID: user-1
-      MCP_ACTOR_TYPE: agent
-      MCP_ACTOR_ROLES: developer
-      MCP_SERVER_NAME: demo.mcp
-      PORT: "8084"
-    ports:
-      - "8084:8084"
-    depends_on:
-      - pdp
-      - controlplane-api
-      - mcp-upstream
-
   ui:
     build:
       context: ../ui

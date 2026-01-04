@@ -24,7 +24,6 @@ Container breakdown:
   - `mcp-adapter` — MCP-facing enforcement adapter
   - `mcp-upstream` — MCP test upstream service
   - `upstream-sample` — demo upstream for PEP forwarding
-  - `pep-` —  PEP gateway (optional profile)
 
 Observability profile:
 - `make dev` enables the `obs` profile by default (Redis + OTel Collector + Jaeger).

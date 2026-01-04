@@ -23,16 +23,6 @@ make dev
 ```
 This enables Redis + OTel Collector + Jaeger via `COMPOSE_PROFILES=obs`.
 
-Optional: include the  PEP gateway
-```bash
-make dev-
-```
-
-You can also opt in with profiles directly:
-```bash
-COMPOSE_PROFILES=-pep make dev
-```
-
 Optional: auto-seed the UI tenant
 Set `NEXT_PUBLIC_TENANT_ID` before starting the UI so the console auto-selects a tenant:
 ```bash
