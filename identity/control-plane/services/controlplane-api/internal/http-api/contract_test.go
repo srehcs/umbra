@@ -62,7 +62,7 @@ func TestControlPlaneContractOpenAPI(t *testing.T) {
 	assertSchemaExists(t, spec, "ActivePolicyResponse")
 
 	errResp := derefSchema(t, spec, spec.Components.Schemas["ErrorResponse"])
-	assertRequired(t, errResp.Required, "error_code", "message")
+	assertRequired(t, errResp.Required, "error")
 
 	receiptsPath := spec.Paths["/v1/receipts"]
 	if receiptsPath.Get == nil || receiptsPath.Post == nil {

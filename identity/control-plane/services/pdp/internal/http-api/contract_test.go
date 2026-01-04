@@ -78,11 +78,8 @@ func TestDecisionContractOpenAPI(t *testing.T) {
 	assertInSet(t, decisionEnum, "allow", "deny")
 
 	errResp := derefSchema(t, spec, spec.Components.Schemas["ErrorResponse"])
-	if errResp.Properties["error_code"] == nil {
-		t.Fatalf("missing error_code property in ErrorResponse")
-	}
-	if errResp.Properties["error_code"].Type != "" && errResp.Properties["error_code"].Type != "string" {
-		t.Fatalf("expected error_code to be string, got %q", errResp.Properties["error_code"].Type)
+	if errResp.Properties["error"] == nil {
+		t.Fatalf("missing error property in ErrorResponse")
 	}
 
 	op := spec.Paths["/v1/decision"].Post
@@ -146,8 +143,12 @@ func TestDecisionContractRuntime(t *testing.T) {
 	if err := json.NewDecoder(errRec.Body).Decode(&errOut); err != nil {
 		t.Fatalf("decode error response failed: %v", err)
 	}
-	if errOut["error_code"] != "POLICY_INVALID" {
-		t.Fatalf("expected error_code POLICY_INVALID, got %v", errOut["error_code"])
+	errObj, ok := errOut["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected error object, got %v", errOut["error"])
+	}
+	if errObj["code"] != "POLICY_INVALID" {
+		t.Fatalf("expected error code POLICY_INVALID, got %v", errObj["code"])
 	}
 }
 

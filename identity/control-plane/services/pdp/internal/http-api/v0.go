@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,11 +34,15 @@ type receiptBody struct {
 	SpanID        string         `json:"span_id,omitempty"`
 }
 
+type errorBody struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 type errorResponse struct {
-	ErrorCode string `json:"error_code"`
-	Message   string `json:"message"`
-	RequestID string `json:"request_id,omitempty"`
-	TraceID   string `json:"trace_id,omitempty"`
+	Error     errorBody `json:"error"`
+	RequestID string    `json:"request_id,omitempty"`
+	TraceID   string    `json:"trace_id,omitempty"`
 }
 
 func registerV0(mux *http.ServeMux, logger *slog.Logger) {
@@ -55,7 +60,7 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 
 	mux.HandleFunc("/v1/decision", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
+			writeMethodNotAllowed(w)
 			return
 		}
 
@@ -66,7 +71,7 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "POLICY_INVALID", "invalid json", "", "")
+			writeError(w, http.StatusBadRequest, policy.ErrorCodePolicyInvalid, "invalid json", "", "")
 			return
 		}
 
@@ -83,7 +88,7 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 
 		tenantID, err := uuid.Parse(req.Tenant.TenantID)
 		if err != nil || tenantID == uuid.Nil {
-			writeError(w, http.StatusBadRequest, "POLICY_INVALID", "invalid tenant_id", requestID, traceID)
+			writeError(w, http.StatusBadRequest, policy.ErrorCodePolicyInvalid, "invalid tenant_id", requestID, traceID)
 			return
 		}
 
@@ -132,7 +137,7 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 
 		var pol policy.Policy
 		if err := json.Unmarshal(ap.Policy, &pol); err != nil {
-			writeError(w, http.StatusInternalServerError, "POLICY_INVALID", "invalid policy json", requestID, traceID)
+			writeError(w, http.StatusInternalServerError, policy.ErrorCodePolicyInvalid, "invalid policy json", requestID, traceID)
 			return
 		}
 
@@ -208,12 +213,19 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 }
 
 func writeError(w http.ResponseWriter, status int, code, message, requestID, traceID string) {
+	if strings.TrimSpace(requestID) == "" {
+		requestID = uuid.NewString()
+	}
 	w.Header().Set("content-type", "application/json")
+	w.Header().Set("x-request-id", requestID)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(errorResponse{
-		ErrorCode: code,
-		Message:   message,
+		Error:     errorBody{Code: code, Message: message},
 		RequestID: requestID,
 		TraceID:   traceID,
 	})
+}
+
+func writeMethodNotAllowed(w http.ResponseWriter) {
+	writeError(w, http.StatusMethodNotAllowed, protocol.ErrorCodeMethodNotAllowed, "method not allowed", "", "")
 }
