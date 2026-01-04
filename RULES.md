@@ -20,14 +20,6 @@ See: `docs/how-to-develop.md` for the “golden path” workflow used by this sc
 - UI fetches must be abortable; cancel stale requests on unmount or filter changes.
 - UI should avoid expensive render-time serialization (e.g., JSON.stringify in render); memoize or lazy-render.
 
-##  standards
-- Prefer safe ; no `unsafe` in request paths without explicit justification and isolation.
-- Use `clippy` clean builds (`cargo clippy -- -D warnings`) for new  services.
-- Enforce timeouts and bounded concurrency on outbound calls.
-- Avoid blocking in async paths; use `spawn_blocking` for CPU-heavy or blocking I/O.
-- Use bounded channels/queues; avoid unbounded buffers without backpressure.
-- Avoid logging sensitive data; redact in receipts and logs.
-
 ## Go standards
 - Keep request handlers thin; move domain logic into package-level services.
 - Always propagate `context.Context`; honor cancellations/timeouts on I/O.

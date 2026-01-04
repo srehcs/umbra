@@ -1,24 +1,47 @@
-# general
+# System/editor
 .DS_Store
-.env
 .idea/
 .vscode/
+
+# Environment files
+.env
+.env.*
+
+# Local configs (never commit)
+.gitconfig
+git.config
+
+# Secrets/keys/certs
+*.key
+*.pem
+*.p12
+*.crt
+*.csr
+*.kubeconfig
+
+# Build/cache
 **/.cache/
 **/dist/
 **/build/
 
-# go
+# Go
 **/*.test
 **/*.out
 **/bin/
 **/tmp/
 coverage/
-*.log
 
-# node
+# Node
 **/node_modules/
 **/.next/
 **/.turbo/
 
-# compose
+# Databases
+*.sqlite
+*.db
+
+# Logs
+*.log
+
+# Compose
 deployments/local/.data/

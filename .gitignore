@@ -1,5 +1,37 @@
+# System/editor
 .DS_Store
+.idea/
+.vscode/
+
+# Environment files
+.env
+.env.*
+
+# Local configs (never commit)
+.gitconfig
+git.config
+
+# Secrets/keys/certs
+*.key
+*.pem
+*.p12
+*.crt
+*.csr
+*.kubeconfig
+
+# Databases
+*.sqlite
+*.db
+
+# Logs
+*.log
+
+# Go
 .gocache/
+
+# Node/pnpm
 .pnpm/
 .pnpm-store/
+
+# Test artifacts
 identity/control-plane/ui/test-results/
