@@ -22,7 +22,7 @@ When the PDP is unreachable or timing out, the PEP enforces a fail-closed postur
   - Risk: longer timeouts increase tail latency and can cascade under load.
 
 ## Expected client behavior
-- `enforce` mode: requests return `503` with `error_code=POLICY_UNAVAILABLE`.
+- `enforce` mode: requests return `503` with `error.code=POLICY_UNAVAILABLE`.
 - `observe` mode: requests are forwarded, but receipts capture PDP unavailability.
 
 ## Recovery checklist

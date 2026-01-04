@@ -360,22 +360,26 @@ components:
     ErrorResponse:
       type: object
       properties:
-        error_code:
-          type: string
-          description: Stable error identifier (service-specific until error-envelope work is complete).
-        message: { type: string }
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: Stable error identifier.
+            message: { type: string }
+            details:
+              type: array
+              description: Optional field-level validation issues.
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  message: { type: string }
+          required: [code, message]
         request_id: { type: string }
         decision_id: { type: string }
         trace_id: { type: string }
-        errors:
-          type: array
-          description: Optional field-level validation issues.
-          items:
-            type: object
-            properties:
-              field: { type: string }
-              message: { type: string }
-      required: [error_code, message]
+      required: [error]
 
     TenantContext:
       type: object

@@ -113,6 +113,17 @@ type rpcError struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
+type rpcErrorBody struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type rpcErrorData struct {
+	Error      rpcErrorBody `json:"error"`
+	RequestID  string       `json:"request_id,omitempty"`
+	DecisionID string       `json:"decision_id,omitempty"`
+}
+
 type toolCallParams struct {
 	Name              string                 `json:"name"`
 	Arguments         map[string]interface{} `json:"arguments,omitempty"`
@@ -247,24 +258,24 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 
 func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		writeRPCMethodNotAllowed(w)
 		return
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
-		writeRPCError(w, http.StatusBadRequest, nil, "invalid request", "BAD_REQUEST", "")
+		writeRPCBadRequest(w, nil, "invalid request", "")
 		return
 	}
 
 	var req rpcRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeRPCError(w, http.StatusBadRequest, nil, "invalid json", "BAD_REQUEST", "")
+		writeRPCBadRequest(w, nil, "invalid json", "")
 		return
 	}
 
 	if strings.TrimSpace(req.Method) != "tools/call" {
-		writeRPCError(w, http.StatusBadRequest, req.ID, "method not supported", "METHOD_NOT_SUPPORTED", "")
+		writeRPCMethodNotSupported(w, req.ID)
 		return
 	}
 
@@ -475,7 +486,7 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 		forwardBody, err := buildForwardBody(req, params)
 		if err != nil {
 			writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, policyHash, policyVersion, outcome, intPtr(http.StatusBadRequest), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
-			writeRPCError(w, http.StatusBadRequest, req.ID, "invalid request", "BAD_REQUEST", requestID)
+			writeRPCError(w, http.StatusBadRequest, req.ID, "invalid request", protocol.ErrorCodeBadRequest, requestID)
 			return
 		}
 
@@ -492,7 +503,7 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 		toolLatency = int(time.Since(toolStarted).Milliseconds())
 		if err != nil {
 			writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, policyHash, policyVersion, "error", intPtr(http.StatusBadGateway), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
-			writeRPCError(w, http.StatusBadGateway, req.ID, "upstream error", "UPSTREAM_ERROR", requestID)
+			writeRPCError(w, http.StatusBadGateway, req.ID, "upstream error", protocol.ErrorCodeUpstreamError, requestID)
 			return
 		}
 		defer toolRes.Body.Close()
@@ -518,11 +529,11 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 	writeInvocationReceipt(ctx, logger, h.store, tenantID, decisionID, requestID, actor, mcpCtx, policyHash, policyVersion, outcome, intPtr(statusCode), pdpLatency, toolLatency, int(time.Since(started).Milliseconds()), meta, started, h.pepMode, enforcement, pdpStatus, traceID, spanID)
 
 	if err != nil {
-		writeRPCError(w, http.StatusServiceUnavailable, req.ID, "policy unavailable", "POLICY_UNAVAILABLE", requestID)
+		writeRPCError(w, http.StatusServiceUnavailable, req.ID, "policy unavailable", protocol.ErrorCodePolicyUnavailable, requestID)
 		return
 	}
 
-	writeRPCError(w, http.StatusForbidden, req.ID, "policy denied", "POLICY_DENIED", requestID, decision.DecisionID)
+	writeRPCError(w, http.StatusForbidden, req.ID, "policy denied", protocol.ErrorCodePolicyDenied, requestID, decision.DecisionID)
 }
 
 func buildForwardBody(req rpcRequest, params toolCallParams) ([]byte, error) {
@@ -621,12 +632,15 @@ func toolIdentifier(serverName, toolName string) string {
 }
 
 func writeRPCError(w http.ResponseWriter, status int, id json.RawMessage, message, code, requestID string, decisionID ...string) {
-	data := map[string]string{"error_code": code}
-	if requestID != "" {
-		data["request_id"] = requestID
+	if strings.TrimSpace(requestID) == "" {
+		requestID = uuid.NewString()
+	}
+	data := rpcErrorData{
+		Error:     rpcErrorBody{Code: code, Message: message},
+		RequestID: requestID,
 	}
 	if len(decisionID) > 0 && decisionID[0] != "" {
-		data["decision_id"] = decisionID[0]
+		data.DecisionID = decisionID[0]
 	}
 
 	resp := rpcResponse{
@@ -639,8 +653,21 @@ func writeRPCError(w http.ResponseWriter, status int, id json.RawMessage, messag
 		},
 	}
 	w.Header().Set("content-type", "application/json")
+	w.Header().Set("x-request-id", requestID)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func writeRPCBadRequest(w http.ResponseWriter, id json.RawMessage, message, requestID string) {
+	writeRPCError(w, http.StatusBadRequest, id, message, protocol.ErrorCodeBadRequest, requestID)
+}
+
+func writeRPCMethodNotAllowed(w http.ResponseWriter) {
+	writeRPCError(w, http.StatusMethodNotAllowed, nil, "method not allowed", protocol.ErrorCodeMethodNotAllowed, "")
+}
+
+func writeRPCMethodNotSupported(w http.ResponseWriter, id json.RawMessage) {
+	writeRPCError(w, http.StatusBadRequest, id, "method not supported", protocol.ErrorCodeMethodNotSupported, "")
 }
 
 func durationFromEnv(key string, def time.Duration) time.Duration {

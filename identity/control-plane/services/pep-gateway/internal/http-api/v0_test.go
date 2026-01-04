@@ -92,8 +92,11 @@ func TestObserveVsEnforceMode(t *testing.T) {
 			if tt.pepMode == "enforce" && tt.decision == "deny" {
 				var errResp blockedResponse
 				json.NewDecoder(rec.Body).Decode(&errResp)
-				if errResp.ErrorCode != "POLICY_DENIED" {
-					t.Errorf("expected error code POLICY_DENIED, got %s", errResp.ErrorCode)
+				if errResp.Error.Code == "" || errResp.Error.Message == "" {
+					t.Error("expected error code and message in response")
+				}
+				if errResp.Error.Code != "POLICY_DENIED" {
+					t.Errorf("expected error code POLICY_DENIED, got %s", errResp.Error.Code)
 				}
 				if errResp.RequestID == "" {
 					t.Error("expected request_id in error response")
@@ -179,6 +182,9 @@ func TestInvocationCorrelationIDs(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&errResp); err != nil {
 		t.Fatalf("decode response failed: %v", err)
 	}
+	if errResp.Error.Code == "" || errResp.Error.Message == "" {
+		t.Fatal("expected error code and message in response")
+	}
 	if errResp.RequestID == "" {
 		t.Fatal("expected request_id in response")
 	}
@@ -255,8 +261,8 @@ func TestPDPUnavailableObserveVsEnforce(t *testing.T) {
 				if err := json.NewDecoder(rec.Body).Decode(&errResp); err != nil {
 					t.Fatalf("decode response failed: %v", err)
 				}
-				if errResp.ErrorCode != tt.expectedCode {
-					t.Fatalf("expected error code %s, got %s", tt.expectedCode, errResp.ErrorCode)
+				if errResp.Error.Code != tt.expectedCode {
+					t.Fatalf("expected error code %s, got %s", tt.expectedCode, errResp.Error.Code)
 				}
 			}
 		})

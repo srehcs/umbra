@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/policy"
+	"github.com/umbra-labs/agent-identity-control-plane/packages/go/protocol"
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/receipts"
 
 	"github.com/google/uuid"
@@ -60,6 +61,17 @@ type ListReceiptsResponse struct {
 type fieldError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
+}
+
+type errorBody struct {
+	Code    string       `json:"code"`
+	Message string       `json:"message"`
+	Details []fieldError `json:"details,omitempty"`
+}
+
+type errorResponse struct {
+	Error     errorBody `json:"error"`
+	RequestID string    `json:"request_id,omitempty"`
 }
 
 type receiptIngestRequest struct {
@@ -129,12 +141,12 @@ func (s *Server) tenantFromRequest(r *http.Request) (uuid.UUID, error) {
 
 func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 	if s.Store == nil {
-		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
+		writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 		return
 	}
 	tenant, err := s.tenantFromRequest(r)
 	if err != nil || tenant == uuid.Nil {
-		http.Error(w, "missing/invalid x-umbra-tenant-id", http.StatusBadRequest)
+		writeInvalidTenant(w, r)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -144,7 +156,7 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		items, err := s.Store.ListTools(ctx, tenant, 50)
 		if err != nil {
-			http.Error(w, "db error", 500)
+			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
 		writeJSON(w, map[string]interface{}{"items": items})
@@ -155,33 +167,33 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 			Config json.RawMessage `json:"config"`
 		}
 		if err := decodeJSON(r, &body); err != nil {
-			http.Error(w, "invalid json", 400)
+			writeInvalidJSON(w, r)
 			return
 		}
 		if body.Name == "" || body.Kind == "" {
-			http.Error(w, "name and kind required", 400)
+			writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidRequest, "name and kind required", nil, r)
 			return
 		}
 		t, err := s.Store.CreateTool(ctx, tenant, body.Name, body.Kind, body.Config)
 		if err != nil {
-			http.Error(w, "db error", 500)
+			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
 		writeJSON(w, t)
 	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w, r)
 	}
 }
 
 func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 	tenant, err := s.tenantFromRequest(r)
 	if err != nil || tenant == uuid.Nil {
-		http.Error(w, "missing/invalid x-umbra-tenant-id", http.StatusBadRequest)
+		writeInvalidTenant(w, r)
 		return
 	}
 	if s.Store == nil {
-		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
+		writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -191,7 +203,7 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		items, err := s.Store.ListPolicies(ctx, tenant, 50)
 		if err != nil {
-			http.Error(w, "db error", 500)
+			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
 		out := make([]policyResponse, 0, len(items))
@@ -205,27 +217,18 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 			Policy json.RawMessage `json:"policy"`
 		}
 		if err := decodeJSON(r, &body); err != nil {
-			http.Error(w, "invalid json", 400)
+			writeInvalidJSON(w, r)
 			return
 		}
 		if body.Name == "" || len(body.Policy) == 0 {
-			http.Error(w, "name and policy required", 400)
+			writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidRequest, "name and policy required", nil, r)
 			return
 		}
 
 		// Validate the policy
 		validationErrs, policyHash, policySize := policy.ValidatePolicyWithSize(body.Policy)
 		if len(validationErrs) > 0 {
-			w.WriteHeader(http.StatusBadRequest)
-			response := map[string]interface{}{
-				"code":    policy.ErrorCodePolicyInvalid,
-				"message": "policy validation failed",
-				"errors":  validationErrs,
-			}
-			if reqID := r.Header.Get("x-request-id"); reqID != "" {
-				response["request_id"] = reqID
-			}
-			writeJSON(w, response)
+			writeErrorResponse(w, http.StatusBadRequest, policy.ErrorCodePolicyInvalid, "policy validation failed", policyErrorsToFieldErrors(validationErrs), r)
 			s.Logger.Warn("policy validation failed",
 				"tenant_id", tenant.String(),
 				"policy_name", body.Name,
@@ -239,7 +242,7 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 		p, err := s.Store.CreatePolicy(ctx, tenant, body.Name, body.Policy, policyHash)
 		if err != nil {
 			s.Logger.Error("policy creation failed", "err", err)
-			http.Error(w, "db error", 500)
+			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
@@ -251,34 +254,34 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 			"policy_hash", p.PolicyHash,
 		)
 	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w, r)
 	}
 }
 
 func (s *Server) handleActivatePolicy(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w, r)
 		return
 	}
 	if s.Store == nil {
-		http.Error(w, "storage not configured", 503)
+		writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 		return
 	}
 	tenant, err := s.tenantFromRequest(r)
 	if err != nil || tenant == uuid.Nil {
-		http.Error(w, "missing/invalid x-umbra-tenant-id", 400)
+		writeInvalidTenant(w, r)
 		return
 	}
 	var body struct {
 		PolicyID string `json:"policy_id"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		http.Error(w, "invalid json", 400)
+		writeInvalidJSON(w, r)
 		return
 	}
 	pid, err := uuid.Parse(body.PolicyID)
 	if err != nil {
-		http.Error(w, "invalid policy_id", 400)
+		writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidRequest, "invalid policy_id", nil, r)
 		return
 	}
 	s.activatePolicyByID(w, r, tenant, pid)
@@ -286,12 +289,12 @@ func (s *Server) handleActivatePolicy(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePolicyByID(w http.ResponseWriter, r *http.Request) {
 	if s.Store == nil {
-		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
+		writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 		return
 	}
 	tenant, err := s.tenantFromRequest(r)
 	if err != nil || tenant == uuid.Nil {
-		http.Error(w, "missing/invalid x-umbra-tenant-id", http.StatusBadRequest)
+		writeInvalidTenant(w, r)
 		return
 	}
 
@@ -305,13 +308,13 @@ func (s *Server) handlePolicyByID(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(path, "/")
 	policyID, err := uuid.Parse(parts[0])
 	if err != nil {
-		http.Error(w, "invalid policy id", http.StatusBadRequest)
+		writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidRequest, "invalid policy id", nil, r)
 		return
 	}
 
 	if len(parts) == 2 && parts[1] == "activate" {
 		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
+			writeMethodNotAllowed(w, r)
 			return
 		}
 		s.activatePolicyByID(w, r, tenant, policyID)
@@ -325,10 +328,10 @@ func (s *Server) handlePolicyByID(w http.ResponseWriter, r *http.Request) {
 		p, err := s.Store.GetPolicy(ctx, tenant, policyID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				http.Error(w, "not found", http.StatusNotFound)
+				writeErrorResponse(w, http.StatusNotFound, protocol.ErrorCodeNotFound, "not found", nil, r)
 				return
 			}
-			http.Error(w, "db error", 500)
+			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
 		writeJSON(w, policyResponseFrom(p))
@@ -337,26 +340,17 @@ func (s *Server) handlePolicyByID(w http.ResponseWriter, r *http.Request) {
 			Policy json.RawMessage `json:"policy"`
 		}
 		if err := decodeJSON(r, &body); err != nil {
-			http.Error(w, "invalid json", 400)
+			writeInvalidJSON(w, r)
 			return
 		}
 		if len(body.Policy) == 0 {
-			http.Error(w, "policy required", 400)
+			writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidRequest, "policy required", nil, r)
 			return
 		}
 
 		validationErrs, policyHash, policySize := policy.ValidatePolicyWithSize(body.Policy)
 		if len(validationErrs) > 0 {
-			w.WriteHeader(http.StatusBadRequest)
-			response := map[string]interface{}{
-				"code":    policy.ErrorCodePolicyInvalid,
-				"message": "policy validation failed",
-				"errors":  validationErrs,
-			}
-			if reqID := r.Header.Get("x-request-id"); reqID != "" {
-				response["request_id"] = reqID
-			}
-			writeJSON(w, response)
+			writeErrorResponse(w, http.StatusBadRequest, policy.ErrorCodePolicyInvalid, "policy validation failed", policyErrorsToFieldErrors(validationErrs), r)
 			s.Logger.Warn("policy validation failed",
 				"tenant_id", tenant.String(),
 				"policy_id", policyID.String(),
@@ -372,40 +366,40 @@ func (s *Server) handlePolicyByID(w http.ResponseWriter, r *http.Request) {
 		existing, err := s.Store.GetPolicy(ctx, tenant, policyID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				http.Error(w, "not found", http.StatusNotFound)
+				writeErrorResponse(w, http.StatusNotFound, protocol.ErrorCodeNotFound, "not found", nil, r)
 				return
 			}
-			http.Error(w, "db error", 500)
+			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
 		if existing.Active {
-			http.Error(w, "cannot update active policy", http.StatusConflict)
+			writeErrorResponse(w, http.StatusConflict, protocol.ErrorCodeConflict, "cannot update active policy", nil, r)
 			return
 		}
 
 		p, err := s.Store.UpdatePolicy(ctx, tenant, policyID, body.Policy, policyHash)
 		if err != nil {
-			http.Error(w, "db error", 500)
+			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
 		writeJSON(w, policyResponseFrom(p))
 	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w, r)
 	}
 }
 
 func (s *Server) handleActivePolicy(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w, r)
 		return
 	}
 	if s.Store == nil {
-		http.Error(w, "storage not configured", 503)
+		writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 		return
 	}
 	tenant, err := s.tenantFromRequest(r)
 	if err != nil || tenant == uuid.Nil {
-		http.Error(w, "missing/invalid x-umbra-tenant-id", 400)
+		writeInvalidTenant(w, r)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -413,10 +407,10 @@ func (s *Server) handleActivePolicy(w http.ResponseWriter, r *http.Request) {
 	p, err := s.Store.GetActivePolicy(ctx, tenant)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "no active policy", http.StatusNotFound)
+			writeErrorResponse(w, http.StatusNotFound, protocol.ErrorCodeNotFound, "no active policy", nil, r)
 			return
 		}
-		http.Error(w, "db error", 500)
+		writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 		return
 	}
 	writeJSON(w, map[string]interface{}{
@@ -435,34 +429,25 @@ func (s *Server) activatePolicyByID(w http.ResponseWriter, r *http.Request, tena
 	p, err := s.Store.GetPolicy(ctx, tenant, policyID)
 	if err != nil {
 		if errors.Is(err, stor.ErrNotFound) || errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErrorResponse(w, http.StatusNotFound, protocol.ErrorCodeNotFound, "not found", nil, r)
 			return
 		}
-		http.Error(w, "db error", 500)
+		writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 		return
 	}
 
 	validationErrs, _, _ := policy.ValidatePolicyWithSize(p.Policy)
 	if len(validationErrs) > 0 {
-		w.WriteHeader(http.StatusBadRequest)
-		response := map[string]interface{}{
-			"code":    policy.ErrorCodePolicyInvalid,
-			"message": "policy validation failed",
-			"errors":  validationErrs,
-		}
-		if reqID := r.Header.Get("x-request-id"); reqID != "" {
-			response["request_id"] = reqID
-		}
-		writeJSON(w, response)
+		writeErrorResponse(w, http.StatusBadRequest, policy.ErrorCodePolicyInvalid, "policy validation failed", policyErrorsToFieldErrors(validationErrs), r)
 		return
 	}
 
 	if err := s.Store.ActivatePolicy(ctx, tenant, policyID); err != nil {
 		if errors.Is(err, stor.ErrNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErrorResponse(w, http.StatusNotFound, protocol.ErrorCodeNotFound, "not found", nil, r)
 			return
 		}
-		http.Error(w, "db error", 500)
+		writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 		return
 	}
 	writeJSON(w, map[string]interface{}{"ok": true})
@@ -470,12 +455,12 @@ func (s *Server) activatePolicyByID(w http.ResponseWriter, r *http.Request, tena
 
 func (s *Server) handleSimulatePolicy(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w, r)
 		return
 	}
 	tenant, err := s.tenantFromRequest(r)
 	if err != nil || tenant == uuid.Nil {
-		http.Error(w, "missing/invalid x-umbra-tenant-id", 400)
+		writeInvalidTenant(w, r)
 		return
 	}
 
@@ -491,7 +476,7 @@ func (s *Server) handleSimulatePolicy(w http.ResponseWriter, r *http.Request) {
 		Policy     json.RawMessage `json:"policy,omitempty"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		http.Error(w, "invalid json", 400)
+		writeInvalidJSON(w, r)
 		return
 	}
 
@@ -507,16 +492,11 @@ func (s *Server) handleSimulatePolicy(w http.ResponseWriter, r *http.Request) {
 		// Validate the supplied policy
 		validationErrs, hash, _ := policy.ValidatePolicyWithSize(body.Policy)
 		if len(validationErrs) > 0 {
-			w.WriteHeader(http.StatusBadRequest)
-			response := map[string]interface{}{
-				"code":    policy.ErrorCodePolicyInvalid,
-				"message": "policy validation failed",
-				"errors":  validationErrs,
+			errs := make([]fieldError, 0, len(validationErrs))
+			for _, err := range validationErrs {
+				errs = append(errs, fieldError{Field: err.Path, Message: err.Message})
 			}
-			if reqID := r.Header.Get("x-request-id"); reqID != "" {
-				response["request_id"] = reqID
-			}
-			writeJSON(w, response)
+			writeErrorResponse(w, http.StatusBadRequest, policy.ErrorCodePolicyInvalid, "policy validation failed", errs, r)
 			return
 		}
 		policyData = body.Policy
@@ -524,13 +504,13 @@ func (s *Server) handleSimulatePolicy(w http.ResponseWriter, r *http.Request) {
 		policyVersion = 0 // Simulated policies don't have a version
 	} else {
 		if s.Store == nil {
-			http.Error(w, "storage not configured", 503)
+			writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 			return
 		}
 		// Fetch active policy
 		policies, err := s.Store.ListPolicies(ctx, tenant, 50)
 		if err != nil {
-			http.Error(w, "db error", 500)
+			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
 		found := false
@@ -544,7 +524,7 @@ func (s *Server) handleSimulatePolicy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !found {
-			http.Error(w, "no active policy found", 404)
+			writeErrorResponse(w, http.StatusNotFound, protocol.ErrorCodeNotFound, "no active policy found", nil, r)
 			return
 		}
 	}
@@ -552,7 +532,7 @@ func (s *Server) handleSimulatePolicy(w http.ResponseWriter, r *http.Request) {
 	// Evaluate the policy
 	var pol policy.Policy
 	if err := json.Unmarshal(policyData, &pol); err != nil {
-		http.Error(w, "policy parse error", 400)
+		writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidRequest, "policy parse error", nil, r)
 		return
 	}
 
@@ -587,18 +567,18 @@ func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		s.handleReceiptsIngest(w, r)
 	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w, r)
 	}
 }
 
 func (s *Server) handleReceiptsList(w http.ResponseWriter, r *http.Request) {
 	if s.Store == nil {
-		http.Error(w, "storage not configured", 503)
+		writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 		return
 	}
 	tenant, err := s.tenantFromRequest(r)
 	if err != nil || tenant == uuid.Nil {
-		http.Error(w, "missing/invalid x-umbra-tenant-id", 400)
+		writeInvalidTenant(w, r)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -620,7 +600,7 @@ func (s *Server) handleReceiptsList(w http.ResponseWriter, r *http.Request) {
 
 	items, next, err := s.Store.ListReceipts(ctx, tenant, limit, kind, q, before)
 	if err != nil {
-		http.Error(w, "db error", 500)
+		writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 		return
 	}
 
@@ -633,12 +613,12 @@ func (s *Server) handleReceiptsList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReceiptsIngest(w http.ResponseWriter, r *http.Request) {
 	if s.Store == nil {
-		http.Error(w, "storage not configured", 503)
+		writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 		return
 	}
 	tenant, err := s.tenantFromRequest(r)
 	if err != nil || tenant == uuid.Nil {
-		writeErrorResponse(w, http.StatusBadRequest, "INVALID_TENANT", "missing/invalid x-umbra-tenant-id", nil, r)
+		writeInvalidTenant(w, r)
 		return
 	}
 
@@ -679,13 +659,13 @@ func (s *Server) handleReceiptsIngest(w http.ResponseWriter, r *http.Request) {
 		}
 		prev, err := s.Store.LastDecisionHash(ctx, tenant)
 		if err != nil {
-			http.Error(w, "db error", 500)
+			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
 		hash := receipts.HashBytes(append([]byte(prev), compactBody...))
 		id, err := s.Store.InsertDecisionReceipt(ctx, tenant, decisionID, body.RequestID, body.PolicyHash, body.Decision, compactBody, prev, hash, body.TraceID, body.SpanID)
 		if err != nil {
-			http.Error(w, "db error", 500)
+			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
@@ -702,7 +682,7 @@ func (s *Server) handleReceiptsIngest(w http.ResponseWriter, r *http.Request) {
 		}
 		prev, err := s.Store.LastInvocationHash(ctx, tenant)
 		if err != nil {
-			http.Error(w, "db error", 500)
+			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
 		hash := receipts.HashBytes(append([]byte(prev), compactBody...))
@@ -712,7 +692,7 @@ func (s *Server) handleReceiptsIngest(w http.ResponseWriter, r *http.Request) {
 		}
 		id, err := s.Store.InsertInvocationReceipt(ctx, tenant, decisionID, body.RequestID, body.ToolName, body.Method, body.Path, body.Outcome, body.StatusCode, latencyMs, compactBody, prev, hash, body.TraceID, body.SpanID)
 		if err != nil {
-			http.Error(w, "db error", 500)
+			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
@@ -781,32 +761,64 @@ func containsArgsField(raw json.RawMessage) bool {
 }
 
 func writeErrorResponse(w http.ResponseWriter, status int, code string, message string, errs []fieldError, r *http.Request) {
-	resp := map[string]interface{}{
-		"error_code": code,
-		"message":    message,
+	reqID := ensureRequestID(r)
+	w.Header().Set("x-request-id", reqID)
+
+	payload := errorResponse{
+		Error:     errorBody{Code: code, Message: message},
+		RequestID: reqID,
 	}
 	if len(errs) > 0 {
-		resp["errors"] = errs
-	}
-	if reqID := r.Header.Get("x-request-id"); reqID != "" {
-		resp["request_id"] = reqID
+		payload.Error.Details = errs
 	}
 	w.WriteHeader(status)
-	writeJSON(w, resp)
+	writeJSON(w, payload)
+}
+
+func writeMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
+	writeErrorResponse(w, http.StatusMethodNotAllowed, protocol.ErrorCodeMethodNotAllowed, "method not allowed", nil, r)
+}
+
+func writeInvalidTenant(w http.ResponseWriter, r *http.Request) {
+	writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidTenant, "missing/invalid x-umbra-tenant-id", nil, r)
+}
+
+func writeInvalidJSON(w http.ResponseWriter, r *http.Request) {
+	writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidJSON, "invalid json", nil, r)
+}
+
+func policyErrorsToFieldErrors(errs []policy.ValidationError) []fieldError {
+	if len(errs) == 0 {
+		return nil
+	}
+	out := make([]fieldError, 0, len(errs))
+	for _, err := range errs {
+		out = append(out, fieldError{Field: err.Path, Message: err.Message})
+	}
+	return out
+}
+
+func ensureRequestID(r *http.Request) string {
+	reqID := strings.TrimSpace(r.Header.Get("x-request-id"))
+	if reqID == "" {
+		reqID = uuid.NewString()
+		r.Header.Set("x-request-id", reqID)
+	}
+	return reqID
 }
 
 func (s *Server) handleReceiptsExport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w, r)
 		return
 	}
 	if s.Store == nil {
-		http.Error(w, "storage not configured", 503)
+		writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 		return
 	}
 	tenant, err := s.tenantFromRequest(r)
 	if err != nil || tenant == uuid.Nil {
-		http.Error(w, "missing/invalid x-umbra-tenant-id", 400)
+		writeInvalidTenant(w, r)
 		return
 	}
 
@@ -816,7 +828,7 @@ func (s *Server) handleReceiptsExport(w http.ResponseWriter, r *http.Request) {
 		format = "json"
 	}
 	if format != "json" && format != "csv" {
-		http.Error(w, "invalid format", 400)
+		writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidRequest, "invalid format", nil, r)
 		return
 	}
 
@@ -824,7 +836,7 @@ func (s *Server) handleReceiptsExport(w http.ResponseWriter, r *http.Request) {
 	if from := strings.TrimSpace(q.Get("from")); from != "" {
 		t, err := time.Parse(time.RFC3339, from)
 		if err != nil {
-			http.Error(w, "invalid from", 400)
+			writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidRequest, "invalid from", nil, r)
 			return
 		}
 		fromPtr = &t
@@ -833,7 +845,7 @@ func (s *Server) handleReceiptsExport(w http.ResponseWriter, r *http.Request) {
 	if to := strings.TrimSpace(q.Get("to")); to != "" {
 		t, err := time.Parse(time.RFC3339, to)
 		if err != nil {
-			http.Error(w, "invalid to", 400)
+			writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidRequest, "invalid to", nil, r)
 			return
 		}
 		toPtr = &t
@@ -841,7 +853,7 @@ func (s *Server) handleReceiptsExport(w http.ResponseWriter, r *http.Request) {
 
 	decision := strings.ToLower(strings.TrimSpace(q.Get("decision")))
 	if decision != "" && decision != "allow" && decision != "deny" {
-		http.Error(w, "invalid decision", 400)
+		writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidRequest, "invalid decision", nil, r)
 		return
 	}
 
@@ -870,29 +882,29 @@ func (s *Server) handleReceiptsExport(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/csv")
 		w.Header().Set("content-disposition", "attachment; filename=receipts_export.csv")
 		if err := s.Store.ExportReceiptsCSV(ctx, tenant, filters, w); err != nil {
-			http.Error(w, "db error", 500)
+			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 		}
 		return
 	}
 
 	w.Header().Set("content-type", "application/json")
 	if err := s.Store.ExportReceiptsJSON(ctx, tenant, filters, w); err != nil {
-		http.Error(w, "db error", 500)
+		writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 	}
 }
 
 func (s *Server) handleReceiptsVerify(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w, r)
 		return
 	}
 	if s.Store == nil {
-		http.Error(w, "storage not configured", 503)
+		writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 		return
 	}
 	tenant, err := s.tenantFromRequest(r)
 	if err != nil || tenant == uuid.Nil {
-		http.Error(w, "missing/invalid x-umbra-tenant-id", 400)
+		writeInvalidTenant(w, r)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -922,10 +934,10 @@ func (s *Server) handleReceiptsVerify(w http.ResponseWriter, r *http.Request) {
 		res, err := verifyKind(kind)
 		if err != nil {
 			if errors.Is(err, stor.ErrNotFound) {
-				http.Error(w, "invalid kind", 400)
+				writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidRequest, "invalid kind", nil, r)
 				return
 			}
-			http.Error(w, "db error", 500)
+			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
 		writeJSON(w, map[string]interface{}{
@@ -937,7 +949,7 @@ func (s *Server) handleReceiptsVerify(w http.ResponseWriter, r *http.Request) {
 	case "all":
 		res, err := verifyKind("decision")
 		if err != nil {
-			http.Error(w, "db error", 500)
+			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
 		if !res.OK {
@@ -951,7 +963,7 @@ func (s *Server) handleReceiptsVerify(w http.ResponseWriter, r *http.Request) {
 		}
 		resInv, err := verifyKind("invocation")
 		if err != nil {
-			http.Error(w, "db error", 500)
+			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
 		if !resInv.OK {
@@ -969,7 +981,7 @@ func (s *Server) handleReceiptsVerify(w http.ResponseWriter, r *http.Request) {
 			"kind":    "all",
 		})
 	default:
-		http.Error(w, "invalid kind", 400)
+		writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidRequest, "invalid kind", nil, r)
 	}
 }
 

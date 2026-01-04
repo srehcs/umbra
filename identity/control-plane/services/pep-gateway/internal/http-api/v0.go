@@ -103,12 +103,44 @@ type invocationReceiptBody struct {
 	Enforcement   string            `json:"enforcement.outcome,omitempty"`
 }
 
+type errorBody struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 type blockedResponse struct {
-	ErrorCode  string `json:"error_code"`
-	Message    string `json:"message"`
-	RequestID  string `json:"request_id"`
-	DecisionID string `json:"decision_id,omitempty"`
-	TraceID    string `json:"trace_id,omitempty"`
+	Error      errorBody `json:"error"`
+	RequestID  string    `json:"request_id,omitempty"`
+	DecisionID string    `json:"decision_id,omitempty"`
+	TraceID    string    `json:"trace_id,omitempty"`
+}
+
+func writeErrorResponse(w http.ResponseWriter, status int, code, message, requestID, decisionID, traceID string) {
+	if strings.TrimSpace(requestID) == "" {
+		requestID = uuid.NewString()
+	}
+	resp := blockedResponse{
+		Error:      errorBody{Code: code, Message: message},
+		RequestID:  requestID,
+		DecisionID: decisionID,
+		TraceID:    traceID,
+	}
+	w.Header().Set("content-type", "application/json")
+	w.Header().Set("x-request-id", requestID)
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func writeMethodNotAllowed(w http.ResponseWriter) {
+	writeErrorResponse(w, http.StatusMethodNotAllowed, protocol.ErrorCodeMethodNotAllowed, "method not allowed", "", "", "")
+}
+
+func writeInvalidJSON(w http.ResponseWriter) {
+	writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidJSON, "invalid json", "", "", "")
+}
+
+func writeInvalidTenant(w http.ResponseWriter) {
+	writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidTenant, "missing/invalid x-umbra-tenant-id", "", "", "")
 }
 
 func registerV0(mux *http.ServeMux, logger *slog.Logger) {
@@ -144,13 +176,13 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 	// V0 convenience endpoint: POST /demo (JSON) to exercise the enforcement flow.
 	mux.HandleFunc("/demo", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			writeMethodNotAllowed(w)
 			return
 		}
 
 		var in demoInvokeRequest
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&in); err != nil {
-			http.Error(w, "invalid json", http.StatusBadRequest)
+			writeInvalidJSON(w)
 			return
 		}
 
@@ -180,7 +212,7 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 		tenantIDStr := r.Header.Get("x-umbra-tenant-id")
 		tenantID, err := uuid.Parse(tenantIDStr)
 		if err != nil || tenantID == uuid.Nil {
-			http.Error(w, "missing/invalid x-umbra-tenant-id", http.StatusBadRequest)
+			writeInvalidTenant(w)
 			return
 		}
 
@@ -280,7 +312,7 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 					reqLogger.Error("upstream error in observe mode (pdp unavailable)", "err", e)
 					writeInvocationReceipt(ctx, reqLogger, store, tenantID, nil, reqID, toolName, r.Method, upath, "", 0, "error", intPtr(http.StatusBadGateway), lat,
 						map[string]string{"stage": "pdp"}, "unavailable", pdpStatus, pdpErrorCode, started, pepMode, "forwarded")
-					http.Error(rw, "upstream error", http.StatusBadGateway)
+					writeErrorResponse(rw, http.StatusBadGateway, protocol.ErrorCodeUpstreamError, "upstream error", reqID, "", traceCtx.TraceID)
 				}
 				proxy.ServeHTTP(w, r)
 				return
@@ -289,15 +321,7 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 			lat := int(time.Since(started).Milliseconds())
 			writeInvocationReceipt(ctx, reqLogger, store, tenantID, nil, reqID, toolName, r.Method, upath, "", 0, "denied", intPtr(http.StatusServiceUnavailable), lat,
 				map[string]string{"stage": "pdp"}, "unavailable", pdpStatus, pdpErrorCode, started, pepMode, "blocked")
-			w.Header().Set("content-type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			resp := blockedResponse{
-				ErrorCode: "POLICY_UNAVAILABLE",
-				Message:   "pdp unavailable",
-				RequestID: reqID,
-				TraceID:   traceCtx.TraceID,
-			}
-			_ = json.NewEncoder(w).Encode(resp)
+			writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodePolicyUnavailable, "pdp unavailable", reqID, "", traceCtx.TraceID)
 			return
 		}
 
@@ -323,7 +347,7 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 					reqLogger.Error("upstream error in observe mode", "err", e)
 					writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, decision.PolicyHash, decision.PolicyVersion, "denied", intPtr(http.StatusBadGateway), lat,
 						map[string]string{"reason": decision.Reason}, decision.Decision, "ok", "", started, pepMode, "forwarded")
-					http.Error(rw, "upstream error", http.StatusBadGateway)
+					writeErrorResponse(rw, http.StatusBadGateway, protocol.ErrorCodeUpstreamError, "upstream error", reqID, decision.DecisionID, traceCtx.TraceID)
 				}
 				proxy.ServeHTTP(w, r)
 				return
@@ -335,16 +359,7 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 					map[string]string{"reason": decision.Reason}, decision.Decision, "ok", "", started, pepMode, "blocked")
 
 				// Return structured error response
-				w.Header().Set("content-type", "application/json")
-				w.WriteHeader(http.StatusForbidden)
-				resp := blockedResponse{
-					ErrorCode:  "POLICY_DENIED",
-					Message:    decision.Reason,
-					RequestID:  reqID,
-					DecisionID: decision.DecisionID,
-					TraceID:    traceCtx.TraceID,
-				}
-				_ = json.NewEncoder(w).Encode(resp)
+				writeErrorResponse(w, http.StatusForbidden, protocol.ErrorCodePolicyDenied, decision.Reason, reqID, decision.DecisionID, traceCtx.TraceID)
 				return
 			}
 		}
@@ -363,7 +378,7 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 			reqLogger.Error("upstream error", "err", e)
 			writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, decision.PolicyHash, decision.PolicyVersion, "error", intPtr(http.StatusBadGateway), lat,
 				map[string]string{"upstream": proxyURLHost(proxy)}, decision.Decision, "ok", "", started, pepMode, "forwarded")
-			http.Error(rw, "upstream error", http.StatusBadGateway)
+			writeErrorResponse(rw, http.StatusBadGateway, protocol.ErrorCodeUpstreamError, "upstream error", reqID, decision.DecisionID, traceCtx.TraceID)
 		}
 
 		proxy.ServeHTTP(w, r)
@@ -445,12 +460,12 @@ func classifyPDPError(err error, status int) (string, string) {
 		return "ok", ""
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return "timeout", "POLICY_UNAVAILABLE"
+		return "timeout", protocol.ErrorCodePolicyUnavailable
 	}
 	if status >= 500 || status == 0 {
-		return "unavailable", "POLICY_UNAVAILABLE"
+		return "unavailable", protocol.ErrorCodePolicyUnavailable
 	}
-	return "error", "POLICY_UNAVAILABLE"
+	return "error", protocol.ErrorCodePolicyUnavailable
 }
 
 func getenv(k, d string) string {

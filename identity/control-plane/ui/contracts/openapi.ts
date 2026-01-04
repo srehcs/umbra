@@ -54,17 +54,17 @@ export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
     ErrorResponse: {
-      /** @description Stable error identifier (service-specific until error-envelope work is complete). */
-      error_code: string;
-      message: string;
+      error: {
+        code: string;
+        message: string;
+        details?: {
+            field?: string;
+            message?: string;
+          }[];
+      };
       request_id?: string;
       decision_id?: string;
       trace_id?: string;
-      /** @description Optional field-level validation issues. */
-      errors?: {
-          field?: string;
-          message?: string;
-        }[];
     };
     TenantContext: {
       tenant_id: string;

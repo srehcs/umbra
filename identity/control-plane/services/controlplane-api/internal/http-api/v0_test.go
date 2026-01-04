@@ -354,11 +354,14 @@ func TestHandleSimulatePolicy_WithInvalidPolicy(t *testing.T) {
 	respBytes, _ := io.ReadAll(w.Body)
 	json.Unmarshal(respBytes, &resp)
 
-	if code, ok := resp["code"]; !ok || code != policy.ErrorCodePolicyInvalid {
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatal("response should contain 'error'")
+	}
+	if code, ok := errObj["code"]; !ok || code != policy.ErrorCodePolicyInvalid {
 		t.Errorf("expected code '%s', got %v", policy.ErrorCodePolicyInvalid, code)
 	}
-
-	if _, ok := resp["errors"]; !ok {
-		t.Error("response should contain 'errors'")
+	if _, ok := errObj["details"]; !ok {
+		t.Error("response should contain 'error.details'")
 	}
 }
