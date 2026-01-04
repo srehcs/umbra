@@ -55,8 +55,10 @@ export interface components {
   schemas: {
     ErrorResponse: {
       error: {
+        /** @description Stable error identifier. */
         code: string;
         message: string;
+        /** @description Optional field-level validation issues. */
         details?: {
             field?: string;
             message?: string;
