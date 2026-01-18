@@ -30,8 +30,7 @@ ordered chain (oldest to newest). Failures are reported with:
 - `OUT_OF_ORDER` when a receipt references a later hash in the ordered chain.
 
 This is signing-ready: tables already include optional signature fields (`signature_alg`,
-`signature_kid`, `signature`, `signed_at`). See `docs/security/receipt_signing.md` for the
-signing and rotation plan.
+`signature_kid`, `signature`, `signed_at`).
 
 ## Known issue: HASH_MISMATCH from JSONB reordering
 

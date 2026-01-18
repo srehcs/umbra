@@ -18,9 +18,6 @@ git.config
 *.crt
 *.csr
 *.kubeconfig
-**/keys/
-**/certs/
-**/secrets/
 
 # Build/cache
 **/.cache/

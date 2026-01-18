@@ -10,7 +10,7 @@
 2) Add a uniform error envelope (code/message/request_id).
 3) Add end-to-end trace propagation through PEP → PDP → receipts (trace_id + span_id stored).
 4) Add “path to OIDC” implementation plan and minimal Keycloak wiring.
-5) Add signature-ready receipts: keyless (future) and local placeholder key options.
+5) Add signature-ready receipts: keyless (future) and local key (dev) options.
 
 ## Contract coverage (status)
 - OpenAPI now includes receipts POST/verify, receipts export, and policies active endpoints.
