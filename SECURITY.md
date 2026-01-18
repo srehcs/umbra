@@ -16,8 +16,8 @@ Key requirements include:
 - Telemetry + audit receipts for security-relevant flows
 
 ## Public documentation guidance
-If this repository is public-facing, documentation must avoid operational details that
-could aid abuse or expose environment-specific information. Public docs must:
+Documentation must avoid operational details that could aid abuse or expose
+environment-specific information. Public docs must:
 - Exclude key identifiers, KMS resource names, or environment-specific config.
 - Avoid exact rotation intervals and step-by-step operational runbooks.
 - Use placeholder identifiers and high-level guidance only.
