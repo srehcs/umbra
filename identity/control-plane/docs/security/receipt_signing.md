@@ -13,13 +13,13 @@ Receipt schema supports optional signature metadata:
 These fields appear in receipt ingest/export payloads and are stored alongside
 the receipt hash chain fields.
 
-## Signing flow (KMS-backed)
+## Signing flow (managed signing service)
 1. Serialize receipt body to canonical JSON bytes.
 2. Compute `receipt_hash = SHA256(prev_hash || body_json)`.
-3. Call KMS `Sign` with the hash bytes (or hash digest, per KMS policy).
+3. Call a managed signing service with the hash bytes (or digest).
 4. Store the signature metadata:
    - `signature_alg`: e.g., `RSASSA_PSS_SHA_256` or `ECDSA_P256_SHA256`
-   - `signature_kid`: key identifier/ARN
+   - `signature_kid`: opaque key reference identifier
    - `signature`: base64-encoded signature
    - `signed_at`: UTC timestamp
 
@@ -34,7 +34,7 @@ the receipt hash chain fields.
   - `receipt_signature_verify_total{result}` with `result=ok|fail`
   - `receipt_signature_sign_total{result}` with `result=ok|fail`
 - Logs (structured):
-  - `receipt_id`, `request_id`, `decision_id`, `signature_kid`, `signature_alg`, `result`
+  - `receipt_id`, `request_id`, `decision_id`, `signature_alg`, `result`
 
 ## Verification test example (placeholder key, non-normative)
 This is a local-only test harness example. It should never ship with real keys:
@@ -45,40 +45,19 @@ This is a local-only test harness example. It should never ship with real keys:
 3) Verify signature (base64) against receipt_hash.
 ```
 
-## Rotation schedule (suggested defaults)
-- **Active key:** 30 days
-- **Overlap (grace) period:** 60 days (verify old signatures)
-- **Retention:** retain old keys until all receipts signed by them age out
-
-Note: cadence and examples here are non-normative and for planning only; they do not imply
-production keys or hardcoded behavior.
-
-## Rotation decision table
-| Key age | Sign | Verify | Action |
-| --- | --- | --- | --- |
-| 0-30 days | Yes | Yes | Active key |
-| 31-90 days | No | Yes | Grace period |
-| >90 days | No | No | Retire key after retention window |
-
-## Key rollover procedure
-1. Generate a new KMS key (or key version) and set it as active for signing.
-2. Keep previous key available for verification during the grace period.
-3. Update `signature_kid` on new receipts only.
-4. After grace period, revoke old key for signing; keep read-only for verification
-   until data retention policies allow removal.
-
-## Rollback (mis-configured key)
-1. Disable the new key for signing.
-2. Revert the signer to the last known-good `signature_kid`.
-3. Reissue signatures for any receipts created during the fault window.
+## Rotation policy (high-level)
+- Rotate signing keys on a periodic cadence defined by internal security policy.
+- Maintain an overlap window where old keys remain available for verification.
+- Retire keys only after verification requirements and data-retention rules are met.
+- Keep detailed runbooks, intervals, and key inventories in internal-only docs.
 
 ## Compliance checklist
 - No private key material stored in repo.
-- `signature_kid` maps to KMS-managed keys only.
-- Rotation cadence documented and enforced.
+- `signature_kid` is an opaque reference, not a provider resource name or ARN.
+- Rotation cadence documented internally and enforced.
 - Verification uses canonical JSON bytes (`body_canonical`).
 - Schema guard script passes (`scripts/dev/verify_signature_schema.sh`).
 
 ## Future work
 - Implement signer/verify components in services and wire to receipt ingest.
-- Add automated verification tests with a placeholder key (non-KMS) for local validation.
+- Add automated verification tests with a placeholder key for local validation.

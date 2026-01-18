@@ -221,7 +221,7 @@ export interface components {
        * @enum {string}
        */
       signature_alg?: "RSASSA_PSS_SHA_256" | "ECDSA_P256_SHA256";
-      /** @example kms://receipt-signing-key/v1 */
+      /** @example key://placeholder */
       signature_kid?: string;
       /** @example MEQCIE2v6y0h1t4z1Yq8w5x7h4c9S+u4k0mCwXr1o7sJ2aQ0AiA8Z0p2m3t4s5u6v7w8x9y0zA1b2c3d4e5f6g7h8i9j0k= */
       signature?: string;
@@ -262,7 +262,7 @@ export interface components {
        * @enum {string}
        */
       signature_alg?: "RSASSA_PSS_SHA_256" | "ECDSA_P256_SHA256";
-      /** @example kms://receipt-signing-key/v1 */
+      /** @example key://placeholder */
       signature_kid?: string;
       /** @example MEQCIE2v6y0h1t4z1Yq8w5x7h4c9S+u4k0mCwXr1o7sJ2aQ0AiA8Z0p2m3t4s5u6v7w8x9y0zA1b2c3d4e5f6g7h8i9j0k= */
       signature?: string;
