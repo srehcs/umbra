@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/trace"
 
 	stor "github.com/umbra-labs/agent-identity-control-plane/packages/go/storage"
 	dbstore "github.com/umbra-labs/agent-identity-control-plane/services/controlplane-api/internal/storage"
@@ -58,21 +59,7 @@ type ListReceiptsResponse struct {
 	NextBefore string            `json:"next_before,omitempty"`
 }
 
-type fieldError struct {
-	Field   string `json:"field"`
-	Message string `json:"message"`
-}
-
-type errorBody struct {
-	Code    string       `json:"code"`
-	Message string       `json:"message"`
-	Details []fieldError `json:"details,omitempty"`
-}
-
-type errorResponse struct {
-	Error     errorBody `json:"error"`
-	RequestID string    `json:"request_id,omitempty"`
-}
+type fieldError = protocol.ErrorDetail
 
 type receiptIngestRequest struct {
 	Kind          string          `json:"kind"`
@@ -762,17 +749,11 @@ func containsArgsField(raw json.RawMessage) bool {
 
 func writeErrorResponse(w http.ResponseWriter, status int, code string, message string, errs []fieldError, r *http.Request) {
 	reqID := ensureRequestID(r)
-	w.Header().Set("x-request-id", reqID)
-
-	payload := errorResponse{
-		Error:     errorBody{Code: code, Message: message},
-		RequestID: reqID,
+	traceID := ""
+	if sc := trace.SpanContextFromContext(r.Context()); sc.IsValid() {
+		traceID = sc.TraceID().String()
 	}
-	if len(errs) > 0 {
-		payload.Error.Details = errs
-	}
-	w.WriteHeader(status)
-	writeJSON(w, payload)
+	protocol.WriteErrorResponse(w, status, code, message, reqID, "", traceID, errs)
 }
 
 func writeMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
@@ -799,11 +780,15 @@ func policyErrorsToFieldErrors(errs []policy.ValidationError) []fieldError {
 }
 
 func ensureRequestID(r *http.Request) string {
-	reqID := strings.TrimSpace(r.Header.Get("x-request-id"))
+	reqID := strings.TrimSpace(r.Header.Get("x-umbra-request-id"))
+	if reqID == "" {
+		reqID = strings.TrimSpace(r.Header.Get("x-request-id"))
+	}
 	if reqID == "" {
 		reqID = uuid.NewString()
-		r.Header.Set("x-request-id", reqID)
 	}
+	r.Header.Set("x-umbra-request-id", reqID)
+	r.Header.Set("x-request-id", reqID)
 	return reqID
 }
 

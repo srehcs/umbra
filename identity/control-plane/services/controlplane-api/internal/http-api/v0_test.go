@@ -12,6 +12,7 @@ import (
 	"os"
 
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/policy"
+	"github.com/umbra-labs/agent-identity-control-plane/packages/go/protocol"
 )
 
 func TestHandlePolicies_CreateValid(t *testing.T) {
@@ -184,6 +185,34 @@ func TestValidationResponseFormat(t *testing.T) {
 		if e.Message == "" {
 			t.Error("error message should not be empty")
 		}
+	}
+}
+
+func TestErrorEnvelopeIncludesRequestID(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	server := &Server{Logger: logger, Store: nil}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/policies", nil)
+	w := httptest.NewRecorder()
+
+	server.handlePolicies(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+
+	var resp protocol.ErrorResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error response failed: %v", err)
+	}
+	if resp.Error.Code != protocol.ErrorCodeInvalidTenant {
+		t.Fatalf("expected code %s, got %s", protocol.ErrorCodeInvalidTenant, resp.Error.Code)
+	}
+	if resp.Error.Message == "" {
+		t.Fatalf("expected error message")
+	}
+	if resp.RequestID == "" {
+		t.Fatalf("expected request_id")
 	}
 }
 

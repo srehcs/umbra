@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -20,7 +18,7 @@ import (
 
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/policy"
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/protocol"
-	stor "github.com/umbra-labs/agent-identity-control-plane/packages/go/storage"
+	"github.com/umbra-labs/agent-identity-control-plane/packages/go/testutil"
 )
 
 func TestPDPUsesActivePolicy(t *testing.T) {
@@ -28,21 +26,12 @@ func TestPDPUsesActivePolicy(t *testing.T) {
 	if dsn == "" {
 		t.Skip("UMBRA_TEST_DATABASE_URL not set")
 	}
+	db, cleanup := testutil.ConnectIsolatedTestDB(t, dsn)
+	defer cleanup()
 
-	ctx := context.Background()
-	db, err := stor.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("db connect failed: %v", err)
+	if err := applySchema(t, db.Pool); err != nil {
+		t.Fatalf("schema setup failed: %v", err)
 	}
-	defer db.Close()
-
-	if err := applyMigrationsPDP(t, db.Pool); err != nil {
-		t.Fatalf("migrations failed: %v", err)
-	}
-	if _, err := db.Pool.Exec(ctx, `TRUNCATE receipts_decision, receipts_invocation, policies, tools, tenants RESTART IDENTITY CASCADE`); err != nil {
-		t.Fatalf("truncate failed: %v", err)
-	}
-
 	tenantID := createTenantPDP(t, db.Pool, "pdp-tenant")
 
 	denyPolicy := policy.Policy{
@@ -97,32 +86,78 @@ func TestPDPUsesActivePolicy(t *testing.T) {
 	}
 }
 
-func applyMigrationsPDP(t *testing.T, pool *pgxpool.Pool) error {
-	t.Helper()
-	sqlFiles := []string{"0001_init.sql", "0002_add_request_id.sql", "0003_add_receipt_indexes.sql", "0004_add_receipt_search_indexes.sql", "0005_add_receipt_search_text.sql"}
-	for _, name := range sqlFiles {
-		content, err := os.ReadFile(migrationPathPDP(t, name))
-		if err != nil {
-			return err
-		}
-		stmts := strings.Split(string(content), ";")
-		for _, stmt := range stmts {
-			if strings.TrimSpace(stmt) == "" {
-				continue
-			}
-			if _, err := pool.Exec(context.Background(), stmt); err != nil {
-				return err
-			}
-		}
+func TestDecisionReceiptTraceID(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("UMBRA_TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("UMBRA_TEST_DATABASE_URL not set")
 	}
-	return nil
+	ctx := context.Background()
+	db, cleanup := testutil.ConnectIsolatedTestDB(t, dsn)
+	defer cleanup()
+
+	if err := applySchema(t, db.Pool); err != nil {
+		t.Fatalf("schema setup failed: %v", err)
+	}
+	tenantID := createTenantPDP(t, db.Pool, "pdp-trace-tenant")
+	allowPolicy := policy.Policy{
+		Version: 1,
+		Mode:    "abac_v0",
+		Rules: []policy.Rule{
+			{Effect: "allow", MethodsAny: []string{"GET"}, PathPrefix: "/demo"},
+		},
+		Default: "deny",
+	}
+	policyID := insertPolicyPDP(t, db.Pool, tenantID, "trace-policy", allowPolicy, false)
+	activatePolicyPDP(t, db.Pool, policyID)
+
+	os.Setenv("DATABASE_URL", dsn)
+	logger := slogDiscard()
+	mux := http.NewServeMux()
+	registerV0(mux, logger)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	traceID := "4bf92f3577b34da6a3ce929d0e0e4736"
+	spanID := "00f067aa0ba902b7"
+	requestID := "req-trace-001"
+
+	req := protocol.DecisionRequest{
+		Tenant: protocol.TenantContext{TenantID: tenantID.String()},
+		Actor:  protocol.Actor{Type: "human", ID: "user-1", Roles: []string{"developer"}},
+		Tool:   protocol.Tool{Name: "demo.tool", Method: "GET", Endpoint: "/demo"},
+		Trace: &protocol.TraceContext{
+			RequestID: requestID,
+			TraceID:   traceID,
+			SpanID:    spanID,
+		},
+	}
+	body, _ := json.Marshal(req)
+	resp, err := http.Post(server.URL+"/v1/decision", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("pdp request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var storedTraceID, storedSpanID string
+	if err := db.Pool.QueryRow(ctx, `
+    SELECT trace_id, span_id
+    FROM receipts_decision
+    WHERE request_id=$1
+    ORDER BY ts DESC
+    LIMIT 1`, requestID).Scan(&storedTraceID, &storedSpanID); err != nil {
+		t.Fatalf("trace lookup failed: %v", err)
+	}
+	if storedTraceID != traceID {
+		t.Fatalf("expected trace_id %s, got %s", traceID, storedTraceID)
+	}
+	if storedSpanID != spanID {
+		t.Fatalf("expected span_id %s, got %s", spanID, storedSpanID)
+	}
 }
 
-func migrationPathPDP(t *testing.T, name string) string {
+func applySchema(t *testing.T, pool *pgxpool.Pool) error {
 	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "../../../.."))
-	return filepath.Join(root, "migrations", name)
+	return testutil.ApplySchemaForTests(t, pool)
 }
 
 func createTenantPDP(t *testing.T, pool *pgxpool.Pool, name string) uuid.UUID {

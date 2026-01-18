@@ -78,6 +78,15 @@ Defaults:
 - `E2E_TENANT_ID=11111111-1111-1111-1111-111111111111`
 - `E2E_ROLES=policy_admin,tool_admin,auditor`
 
+Integration test DB guard
+```bash
+export UMBRA_TEST_DATABASE_URL="postgres://.../umbra_test"
+```
+Integration tests enforce a dedicated test DB (or per-test schema). Override locally with:
+```bash
+export UMBRA_ALLOW_NON_TEST_DB=1
+```
+
 Stopping the stack
 ```bash
 docker compose -f deployments/docker-compose.yml down

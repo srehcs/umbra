@@ -13,6 +13,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/policy"
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/protocol"
@@ -32,17 +33,6 @@ type receiptBody struct {
 	RequestID     string         `json:"request_id,omitempty"`
 	TraceID       string         `json:"trace_id,omitempty"`
 	SpanID        string         `json:"span_id,omitempty"`
-}
-
-type errorBody struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-type errorResponse struct {
-	Error     errorBody `json:"error"`
-	RequestID string    `json:"request_id,omitempty"`
-	TraceID   string    `json:"trace_id,omitempty"`
 }
 
 func registerV0(mux *http.ServeMux, logger *slog.Logger) {
@@ -81,6 +71,14 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 			traceID = req.Trace.TraceID
 			spanID = req.Trace.SpanID
 		}
+		if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+			if traceID == "" {
+				traceID = sc.TraceID().String()
+			}
+			if spanID == "" {
+				spanID = sc.SpanID().String()
+			}
+		}
 		reqLogger := logger.With("request_id", requestID)
 		if traceID != "" {
 			reqLogger = reqLogger.With("trace_id", traceID)
@@ -102,11 +100,22 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 		)
 		defer span.End()
 
+		if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+			if traceID == "" {
+				traceID = sc.TraceID().String()
+			}
+			if spanID == "" {
+				spanID = sc.SpanID().String()
+			}
+		}
+
 		// Default deny if store missing
 		if store == nil {
+			decisionID := uuid.NewString()
+			span.SetAttributes(attribute.String("umbra.decision_id", decisionID))
 			resp := protocol.DecisionResponse{
 				Decision:   "deny",
-				DecisionID: uuid.NewString(),
+				DecisionID: decisionID,
 				Reason:     "storage unavailable (default deny)",
 				RequestID:  requestID,
 				TraceID:    traceID,
@@ -119,15 +128,17 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 		// Load active policy
 		ap, err := store.GetActivePolicy(ctx, tenantID)
 		if err != nil {
+			decisionID := uuid.New()
+			span.SetAttributes(attribute.String("umbra.decision_id", decisionID.String()))
 			resp := protocol.DecisionResponse{
 				Decision:   "deny",
-				DecisionID: uuid.NewString(),
+				DecisionID: decisionID.String(),
 				Reason:     "no active policy (default deny)",
 				RequestID:  requestID,
 				TraceID:    traceID,
 				SpanID:     spanID,
 			}
-			writeDecisionReceipt(ctx, reqLogger, store, tenantID, uuid.New(), requestID, "", "deny", receiptBody{
+			writeDecisionReceipt(ctx, reqLogger, store, tenantID, decisionID, requestID, "", "deny", receiptBody{
 				Actor: req.Actor, Tool: req.Tool, Decision: "deny", Reason: "no active policy (default deny)",
 				RequestID: requestID, TraceID: traceID, SpanID: spanID,
 			}, traceID, spanID)
@@ -159,6 +170,7 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 		}, pol)
 
 		decisionID := uuid.New()
+		span.SetAttributes(attribute.String("umbra.decision_id", decisionID.String()))
 		resp := protocol.DecisionResponse{
 			Decision:      d.Decision,
 			DecisionID:    decisionID.String(),
@@ -216,14 +228,7 @@ func writeError(w http.ResponseWriter, status int, code, message, requestID, tra
 	if strings.TrimSpace(requestID) == "" {
 		requestID = uuid.NewString()
 	}
-	w.Header().Set("content-type", "application/json")
-	w.Header().Set("x-request-id", requestID)
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(errorResponse{
-		Error:     errorBody{Code: code, Message: message},
-		RequestID: requestID,
-		TraceID:   traceID,
-	})
+	protocol.WriteErrorResponse(w, status, code, message, requestID, "", traceID, nil)
 }
 
 func writeMethodNotAllowed(w http.ResponseWriter) {

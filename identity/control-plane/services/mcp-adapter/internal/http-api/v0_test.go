@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/protocol"
@@ -29,6 +30,8 @@ type receiptCapture struct {
 	outcome     string
 	enforcement string
 	pdpStatus   string
+	traceID     string
+	spanID      string
 	body        invocationReceiptBody
 	rawBody     json.RawMessage
 }
@@ -37,7 +40,7 @@ func (s *captureStore) LastInvocationHash(_ context.Context, _ uuid.UUID) (strin
 	return "", nil
 }
 
-func (s *captureStore) InsertInvocationReceipt(_ context.Context, _ uuid.UUID, decisionID *uuid.UUID, requestID string, _ string, _ string, _ string, outcome string, _ *int, _ int, body json.RawMessage, _ string, _ string, _ string, _ string) error {
+func (s *captureStore) InsertInvocationReceipt(_ context.Context, _ uuid.UUID, decisionID *uuid.UUID, requestID string, _ string, _ string, _ string, outcome string, _ *int, _ int, body json.RawMessage, _ string, _ string, traceID string, spanID string) error {
 	var parsed invocationReceiptBody
 	_ = json.Unmarshal(body, &parsed)
 	s.last = receiptCapture{
@@ -46,6 +49,8 @@ func (s *captureStore) InsertInvocationReceipt(_ context.Context, _ uuid.UUID, d
 		outcome:     outcome,
 		enforcement: parsed.Enforcement,
 		pdpStatus:   parsed.PDPStatus,
+		traceID:     traceID,
+		spanID:      spanID,
 		body:        parsed,
 		rawBody:     body,
 	}
@@ -53,8 +58,12 @@ func (s *captureStore) InsertInvocationReceipt(_ context.Context, _ uuid.UUID, d
 }
 
 func newTestHandler(t *testing.T, pepMode string, pdpTransport http.RoundTripper, toolTransport http.RoundTripper, store invocationStore) *mcpHandler {
-	t.Helper()
 	tracer := trace.NewNoopTracerProvider().Tracer("test")
+	return newTestHandlerWithTracer(t, tracer, pepMode, pdpTransport, toolTransport, store)
+}
+
+func newTestHandlerWithTracer(t *testing.T, tracer trace.Tracer, pepMode string, pdpTransport http.RoundTripper, toolTransport http.RoundTripper, store invocationStore) *mcpHandler {
+	t.Helper()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	if pdpTransport == nil {
 		pdpTransport = http.DefaultTransport
@@ -137,6 +146,57 @@ func TestMCPAllowForwardedReceipt(t *testing.T) {
 	}
 }
 
+func TestMCPErrorEnvelope(t *testing.T) {
+	h := newTestHandler(t, "enforce",
+		pdpRoundTripper{onRequest: func(req protocol.DecisionRequest) (protocol.DecisionResponse, int, error) {
+			return protocol.DecisionResponse{
+				Decision:   "allow",
+				DecisionID: uuid.NewString(),
+				Reason:     "ok",
+			}, http.StatusOK, nil
+		}},
+		staticRoundTripper{status: http.StatusOK, body: `{"jsonrpc":"2.0","id":7,"result":{"ok":true}}`},
+		&captureStore{},
+	)
+
+	reqBody := []byte(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":"bad"}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(reqBody))
+	rec := httptest.NewRecorder()
+
+	h.handleMCP(rec, req)
+
+	res := rec.Result()
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("expected 400, got %d: %s", res.StatusCode, string(body))
+	}
+	if res.Header.Get("x-umbra-request-id") == "" {
+		t.Fatalf("expected x-umbra-request-id header")
+	}
+
+	var out map[string]interface{}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatalf("decode response failed: %v", err)
+	}
+	errObj, ok := out["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected error object")
+	}
+	data, ok := errObj["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected error data")
+	}
+	env, ok := data["error"].(map[string]interface{})
+	if !ok || env["code"] == "" || env["message"] == "" {
+		t.Fatalf("expected error envelope with code/message")
+	}
+	if data["request_id"] == "" {
+		t.Fatalf("expected request_id in error data")
+	}
+}
+
 func TestMCPDenyEnforceBlocked(t *testing.T) {
 	var upstreamCalls int32
 
@@ -177,6 +237,52 @@ func TestMCPDenyEnforceBlocked(t *testing.T) {
 	}
 	if store.last.enforcement != "blocked" {
 		t.Fatalf("expected blocked enforcement, got %s", store.last.enforcement)
+	}
+}
+
+func TestMCPTracePropagation(t *testing.T) {
+	expectedTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
+	expectedSpanID := "00f067aa0ba902b7"
+	traceID, _ := trace.TraceIDFromHex(expectedTraceID)
+	spanID, _ := trace.SpanIDFromHex(expectedSpanID)
+
+	store := &captureStore{}
+	tracer := sdktrace.NewTracerProvider().Tracer("test")
+	h := newTestHandlerWithTracer(t, tracer, "enforce",
+		pdpRoundTripper{onRequest: func(req protocol.DecisionRequest) (protocol.DecisionResponse, int, error) {
+			if req.Trace.TraceID != expectedTraceID {
+				t.Fatalf("expected trace_id %s, got %s", expectedTraceID, req.Trace.TraceID)
+			}
+			if req.Trace.SpanID == "" {
+				t.Fatalf("expected span_id in pdp request")
+			}
+			return protocol.DecisionResponse{
+				Decision:   "allow",
+				DecisionID: uuid.NewString(),
+				Reason:     "ok",
+			}, http.StatusOK, nil
+		}},
+		staticRoundTripper{status: http.StatusOK, body: `{"jsonrpc":"2.0","id":8,"result":{"ok":true}}`},
+		store,
+	)
+
+	reqBody := []byte(`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"demo.tool"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(reqBody))
+	parentCtx := trace.ContextWithSpanContext(req.Context(), trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    traceID,
+		SpanID:     spanID,
+		TraceFlags: trace.FlagsSampled,
+	}))
+	req = req.WithContext(parentCtx)
+	rec := httptest.NewRecorder()
+
+	h.handleMCP(rec, req)
+
+	if store.last.traceID != expectedTraceID {
+		t.Fatalf("expected trace_id %s in receipt, got %s", expectedTraceID, store.last.traceID)
+	}
+	if store.last.spanID == "" {
+		t.Fatalf("expected span_id in receipt")
 	}
 }
 
