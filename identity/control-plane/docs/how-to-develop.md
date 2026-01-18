@@ -78,6 +78,11 @@ Defaults:
 - `E2E_TENANT_ID=11111111-1111-1111-1111-111111111111`
 - `E2E_ROLES=policy_admin,tool_admin,auditor`
 
+Schema checks
+```bash
+./scripts/dev/verify_signature_schema.sh
+```
+
 Integration test DB guard
 ```bash
 export UMBRA_TEST_DATABASE_URL="postgres://.../umbra_test"
