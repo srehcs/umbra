@@ -1,4 +1,4 @@
-# Umbra Engineering Rules (Shared Practices)
+# Umbra Engineering Rules (Shared Standards)
 
 This repo assumes you already maintain a canonical `RULES.md` in your Umbra umbrella.
 If you copied that file here, keep it authoritative and enforced via code review and CI.
@@ -23,7 +23,7 @@ See: `docs/how-to-develop.md` for the “golden path” workflow used by this sc
 ## Go standards
 - Keep request handlers thin; move domain logic into package-level services.
 - Always propagate `context.Context`; honor cancellations/timeouts on I/O.
-- Return typed errors; map to `{ error: { code, message }, request_id }` at boundaries.
+- Return typed errors; map to the shared `protocol.ErrorResponse` envelope at boundaries.
 - Avoid global mutable state; inject deps for testability.
 - Use `sql`/`pgx` with explicit columns; avoid `SELECT *` in query paths.
 - Validate input at API edges; keep internal structs trusted and minimal.
@@ -52,3 +52,8 @@ See: `docs/how-to-develop.md` for the “golden path” workflow used by this sc
 - CI must run Go tests (`go test ./...`) from `identity/control-plane`.
 - CI must run UI lint (`pnpm lint`) from `identity/control-plane/ui` with a frozen lockfile.
 - Lockfiles are required for UI dependencies; do not bypass `--frozen-lockfile` in CI.
+
+## Integration test practices
+- Integration tests must target a dedicated test database (or per-test schema) and guard against running on shared/prod DBs.
+- Destructive operations (TRUNCATE/DELETE) require an explicit test DB check before execution.
+- Prefer per-test isolation (schema/database) or explicit setup/teardown to avoid cross-test interference.

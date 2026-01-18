@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/policy"
-	stor "github.com/umbra-labs/agent-identity-control-plane/packages/go/storage"
+	"github.com/umbra-labs/agent-identity-control-plane/packages/go/testutil"
 	"github.com/umbra-labs/agent-identity-control-plane/services/controlplane-api/internal/storage"
 )
 
@@ -28,19 +26,11 @@ func TestPolicyLifecycle_ActivateUpdatesActive(t *testing.T) {
 	if dsn == "" {
 		t.Skip("UMBRA_TEST_DATABASE_URL not set")
 	}
+	db, cleanup := testutil.ConnectIsolatedTestDB(t, dsn)
+	defer cleanup()
 
-	ctx := context.Background()
-	db, err := stor.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("db connect failed: %v", err)
-	}
-	defer db.Close()
-
-	if err := applyMigrations(t, db.Pool); err != nil {
-		t.Fatalf("migrations failed: %v", err)
-	}
-	if _, err := db.Pool.Exec(ctx, `TRUNCATE receipts_decision, receipts_invocation, policies, tools, tenants RESTART IDENTITY CASCADE`); err != nil {
-		t.Fatalf("truncate failed: %v", err)
+	if err := applySchema(t, db.Pool); err != nil {
+		t.Fatalf("schema setup failed: %v", err)
 	}
 
 	tenantID := createTenant(t, db.Pool, "test-tenant-a")
@@ -94,19 +84,12 @@ func TestReceiptExportFiltersAndSafety(t *testing.T) {
 	if dsn == "" {
 		t.Skip("UMBRA_TEST_DATABASE_URL not set")
 	}
-
 	ctx := context.Background()
-	db, err := stor.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("db connect failed: %v", err)
-	}
-	defer db.Close()
+	db, cleanup := testutil.ConnectIsolatedTestDB(t, dsn)
+	defer cleanup()
 
-	if err := applyMigrations(t, db.Pool); err != nil {
-		t.Fatalf("migrations failed: %v", err)
-	}
-	if _, err := db.Pool.Exec(ctx, `TRUNCATE receipts_decision, receipts_invocation, policies, tools, tenants RESTART IDENTITY CASCADE`); err != nil {
-		t.Fatalf("truncate failed: %v", err)
+	if err := applySchema(t, db.Pool); err != nil {
+		t.Fatalf("schema setup failed: %v", err)
 	}
 
 	tenantID := createTenant(t, db.Pool, "export-tenant")
@@ -120,6 +103,7 @@ func TestReceiptExportFiltersAndSafety(t *testing.T) {
 	decisionAllowID := uuid.New()
 	decisionDenyID := uuid.New()
 
+	var err error
 	_, err = db.Pool.Exec(ctx, `
     INSERT INTO receipts_decision(tenant_id, ts, decision_id, policy_hash, decision, body_json, body_canonical, prev_hash, hash, trace_id, span_id, request_id)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
@@ -194,19 +178,11 @@ func TestReceiptIngestDecisionChain(t *testing.T) {
 	if dsn == "" {
 		t.Skip("UMBRA_TEST_DATABASE_URL not set")
 	}
+	db, cleanup := testutil.ConnectIsolatedTestDB(t, dsn)
+	defer cleanup()
 
-	ctx := context.Background()
-	db, err := stor.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("db connect failed: %v", err)
-	}
-	defer db.Close()
-
-	if err := applyMigrations(t, db.Pool); err != nil {
-		t.Fatalf("migrations failed: %v", err)
-	}
-	if _, err := db.Pool.Exec(ctx, `TRUNCATE receipts_decision, receipts_invocation, policies, tools, tenants RESTART IDENTITY CASCADE`); err != nil {
-		t.Fatalf("truncate failed: %v", err)
+	if err := applySchema(t, db.Pool); err != nil {
+		t.Fatalf("schema setup failed: %v", err)
 	}
 
 	tenantID := createTenant(t, db.Pool, "receipt-ingest-tenant")
@@ -246,32 +222,9 @@ func TestReceiptIngestDecisionChain(t *testing.T) {
 	}
 }
 
-func applyMigrations(t *testing.T, pool *pgxpool.Pool) error {
+func applySchema(t *testing.T, pool *pgxpool.Pool) error {
 	t.Helper()
-	sqlFiles := []string{"0001_init.sql", "0002_add_request_id.sql", "0003_add_receipt_indexes.sql", "0004_add_receipt_search_indexes.sql", "0005_add_receipt_search_text.sql"}
-	for _, name := range sqlFiles {
-		content, err := os.ReadFile(migrationPath(t, name))
-		if err != nil {
-			return err
-		}
-		stmts := strings.Split(string(content), ";")
-		for _, stmt := range stmts {
-			if strings.TrimSpace(stmt) == "" {
-				continue
-			}
-			if _, err := pool.Exec(context.Background(), stmt); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func migrationPath(t *testing.T, name string) string {
-	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "../../../.."))
-	return filepath.Join(root, "migrations", name)
+	return testutil.ApplySchemaForTests(t, pool)
 }
 
 func createTenant(t *testing.T, pool *pgxpool.Pool, name string) uuid.UUID {

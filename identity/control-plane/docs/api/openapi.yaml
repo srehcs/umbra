@@ -74,6 +74,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ToolList'
+        '400':
+          description: Invalid request
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Storage error
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     post:
       tags: [tools]
       summary: Create tool (tenant-scoped)
@@ -91,6 +109,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Tool'
+        '400':
+          description: Invalid request
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Storage error
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /v1/policies:
     get:
@@ -104,6 +140,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PolicyList'
+        '400':
+          description: Invalid request
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Storage error
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     post:
       tags: [policies]
       summary: Create policy (tenant-scoped)
@@ -121,6 +175,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Policy'
+        '400':
+          description: Invalid request
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Storage error
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /v1/policies/activate:
     post:
@@ -145,6 +217,33 @@ paths:
                 type: object
                 properties:
                   ok: { type: boolean }
+        '400':
+          description: Invalid request
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Storage error
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /v1/policies/active:
     get:
@@ -195,6 +294,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SimulateResponse'
+        '400':
+          description: Invalid request
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Storage error
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /v1/receipts:
     get:
@@ -223,6 +340,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReceiptList'
+        '400':
+          description: Invalid request
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Storage error
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     post:
       tags: [receipts]
       summary: Ingest a receipt (tenant-scoped)
@@ -349,6 +484,15 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Storage error
+          headers:
+            x-umbra-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
 components:
   headers:
@@ -379,7 +523,7 @@ components:
         request_id: { type: string }
         decision_id: { type: string }
         trace_id: { type: string }
-      required: [error]
+      required: [error, request_id]
 
     TenantContext:
       type: object

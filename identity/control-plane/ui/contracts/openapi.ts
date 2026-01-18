@@ -64,7 +64,7 @@ export interface components {
             message?: string;
           }[];
       };
-      request_id?: string;
+      request_id: string;
       decision_id?: string;
       trace_id?: string;
     };
@@ -334,6 +334,24 @@ export interface operations {
           "application/json": components["schemas"]["ToolList"];
         };
       };
+      /** @description Invalid request */
+      400: {
+        headers: {
+          "x-umbra-request-id": components["headers"]["RequestId"];
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Storage error */
+      500: {
+        headers: {
+          "x-umbra-request-id": components["headers"]["RequestId"];
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
     };
   };
   /** Create tool (tenant-scoped) */
@@ -350,6 +368,24 @@ export interface operations {
           "application/json": components["schemas"]["Tool"];
         };
       };
+      /** @description Invalid request */
+      400: {
+        headers: {
+          "x-umbra-request-id": components["headers"]["RequestId"];
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Storage error */
+      500: {
+        headers: {
+          "x-umbra-request-id": components["headers"]["RequestId"];
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
     };
   };
   /** List policies (tenant-scoped) */
@@ -359,6 +395,24 @@ export interface operations {
       200: {
         content: {
           "application/json": components["schemas"]["PolicyList"];
+        };
+      };
+      /** @description Invalid request */
+      400: {
+        headers: {
+          "x-umbra-request-id": components["headers"]["RequestId"];
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Storage error */
+      500: {
+        headers: {
+          "x-umbra-request-id": components["headers"]["RequestId"];
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
         };
       };
     };
@@ -375,6 +429,24 @@ export interface operations {
       200: {
         content: {
           "application/json": components["schemas"]["Policy"];
+        };
+      };
+      /** @description Invalid request */
+      400: {
+        headers: {
+          "x-umbra-request-id": components["headers"]["RequestId"];
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Storage error */
+      500: {
+        headers: {
+          "x-umbra-request-id": components["headers"]["RequestId"];
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
         };
       };
     };
@@ -395,6 +467,33 @@ export interface operations {
           "application/json": {
             ok?: boolean;
           };
+        };
+      };
+      /** @description Invalid request */
+      400: {
+        headers: {
+          "x-umbra-request-id": components["headers"]["RequestId"];
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Not found */
+      404: {
+        headers: {
+          "x-umbra-request-id": components["headers"]["RequestId"];
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Storage error */
+      500: {
+        headers: {
+          "x-umbra-request-id": components["headers"]["RequestId"];
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
         };
       };
     };
@@ -442,6 +541,24 @@ export interface operations {
           "application/json": components["schemas"]["SimulateResponse"];
         };
       };
+      /** @description Invalid request */
+      400: {
+        headers: {
+          "x-umbra-request-id": components["headers"]["RequestId"];
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Storage error */
+      500: {
+        headers: {
+          "x-umbra-request-id": components["headers"]["RequestId"];
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
     };
   };
   /** List recent receipts (decision + invocation) */
@@ -461,6 +578,24 @@ export interface operations {
       200: {
         content: {
           "application/json": components["schemas"]["ReceiptList"];
+        };
+      };
+      /** @description Invalid request */
+      400: {
+        headers: {
+          "x-umbra-request-id": components["headers"]["RequestId"];
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Storage error */
+      500: {
+        headers: {
+          "x-umbra-request-id": components["headers"]["RequestId"];
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
         };
       };
     };
@@ -559,6 +694,15 @@ export interface operations {
       };
       /** @description Invalid request */
       400: {
+        headers: {
+          "x-umbra-request-id": components["headers"]["RequestId"];
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Storage error */
+      500: {
         headers: {
           "x-umbra-request-id": components["headers"]["RequestId"];
         };

@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/protocol"
@@ -90,7 +91,7 @@ func TestObserveVsEnforceMode(t *testing.T) {
 
 			// For enforce+deny, check response is POLICY_DENIED
 			if tt.pepMode == "enforce" && tt.decision == "deny" {
-				var errResp blockedResponse
+				var errResp protocol.ErrorResponse
 				json.NewDecoder(rec.Body).Decode(&errResp)
 				if errResp.Error.Code == "" || errResp.Error.Message == "" {
 					t.Error("expected error code and message in response")
@@ -103,6 +104,9 @@ func TestObserveVsEnforceMode(t *testing.T) {
 				}
 				if errResp.DecisionID == "" {
 					t.Error("expected decision_id in error response")
+				}
+				if got := rec.Result().Header.Get("x-umbra-request-id"); got == "" {
+					t.Error("expected x-umbra-request-id header")
 				}
 			}
 		})
@@ -139,16 +143,26 @@ func (s *captureStore) InsertInvocationReceipt(_ context.Context, _ uuid.UUID, d
 func TestInvocationCorrelationIDs(t *testing.T) {
 	var pdpRequestID string
 	var decisionID string
+	expectedTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
+	expectedSpanID := "00f067aa0ba902b7"
+	traceID, _ := trace.TraceIDFromHex(expectedTraceID)
+	spanID, _ := trace.SpanIDFromHex(expectedSpanID)
 
 	store := &captureStore{}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	tracer := trace.NewNoopTracerProvider().Tracer("test")
+	tracer := sdktrace.NewTracerProvider().Tracer("test")
 	pdp := &PDPClient{
 		BaseURL: "http://pdp.invalid",
 		Client: &http.Client{Transport: captureRoundTripper{
 			onRequest: func(req protocol.DecisionRequest) protocol.DecisionResponse {
 				if req.Trace == nil || req.Trace.RequestID == "" {
 					t.Errorf("expected request_id in pdp request")
+				}
+				if req.Trace.TraceID != expectedTraceID {
+					t.Errorf("expected trace_id %s, got %s", expectedTraceID, req.Trace.TraceID)
+				}
+				if req.Trace.SpanID == "" {
+					t.Errorf("expected span_id in pdp request")
 				}
 				pdpRequestID = req.Trace.RequestID
 				decisionID = uuid.NewString()
@@ -171,6 +185,12 @@ func TestInvocationCorrelationIDs(t *testing.T) {
 	mux.Handle("/tool/", handleToolProxy(tracer, logger, store, pdp, proxy, "enforce"))
 
 	req := httptest.NewRequest(http.MethodGet, "/tool/test", nil)
+	parentCtx := trace.ContextWithSpanContext(req.Context(), trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    traceID,
+		SpanID:     spanID,
+		TraceFlags: trace.FlagsSampled,
+	}))
+	req = req.WithContext(parentCtx)
 	req.Header.Set("x-umbra-tenant-id", uuid.NewString())
 	req.Header.Set("x-umbra-actor-id", "test-user")
 	req.Header.Set("x-umbra-tool-name", "test-tool")
@@ -178,7 +198,7 @@ func TestInvocationCorrelationIDs(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	var errResp blockedResponse
+	var errResp protocol.ErrorResponse
 	if err := json.NewDecoder(rec.Body).Decode(&errResp); err != nil {
 		t.Fatalf("decode response failed: %v", err)
 	}
@@ -205,6 +225,12 @@ func TestInvocationCorrelationIDs(t *testing.T) {
 	}
 	if store.captured.decisionID == nil || store.captured.decisionID.String() != errResp.DecisionID {
 		t.Fatalf("stored decision_id mismatch: %v vs %s", store.captured.decisionID, errResp.DecisionID)
+	}
+	if store.captured.traceID != expectedTraceID {
+		t.Fatalf("stored trace_id mismatch: %s vs %s", store.captured.traceID, expectedTraceID)
+	}
+	if store.captured.spanID == "" {
+		t.Fatalf("expected stored span_id")
 	}
 }
 
@@ -257,12 +283,18 @@ func TestPDPUnavailableObserveVsEnforce(t *testing.T) {
 				t.Fatalf("expected enforcement.outcome in receipt")
 			}
 			if tt.expectedCode != "" {
-				var errResp blockedResponse
+				var errResp protocol.ErrorResponse
 				if err := json.NewDecoder(rec.Body).Decode(&errResp); err != nil {
 					t.Fatalf("decode response failed: %v", err)
 				}
 				if errResp.Error.Code != tt.expectedCode {
 					t.Fatalf("expected error code %s, got %s", tt.expectedCode, errResp.Error.Code)
+				}
+				if errResp.RequestID == "" {
+					t.Fatalf("expected request_id in error response")
+				}
+				if rec.Result().Header.Get("x-umbra-request-id") == "" {
+					t.Fatalf("expected x-umbra-request-id header")
 				}
 			}
 		})

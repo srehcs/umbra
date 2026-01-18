@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -113,15 +114,10 @@ type rpcError struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
-type rpcErrorBody struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
 type rpcErrorData struct {
-	Error      rpcErrorBody `json:"error"`
-	RequestID  string       `json:"request_id,omitempty"`
-	DecisionID string       `json:"decision_id,omitempty"`
+	Error      protocol.ErrorBody `json:"error"`
+	RequestID  string             `json:"request_id,omitempty"`
+	DecisionID string             `json:"decision_id,omitempty"`
 }
 
 type toolCallParams struct {
@@ -206,7 +202,10 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 
 	pdp := &PDPClient{
 		BaseURL: getenv("PDP_URL", "http://pdp:8081"),
-		Client:  &http.Client{Timeout: pdpTimeout},
+		Client: &http.Client{
+			Timeout:   pdpTimeout,
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
+		},
 	}
 
 	upstreamURL := strings.TrimSpace(getenv("MCP_UPSTREAM_URL", ""))
@@ -298,6 +297,9 @@ func (h *mcpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 	requestID := strings.TrimSpace(params.RequestID)
 	if requestID == "" {
 		requestID = strings.TrimSpace(r.Header.Get("x-umbra-request-id"))
+	}
+	if requestID == "" {
+		requestID = strings.TrimSpace(r.Header.Get("x-request-id"))
 	}
 	if requestID == "" {
 		requestID = uuid.NewString()
@@ -636,7 +638,7 @@ func writeRPCError(w http.ResponseWriter, status int, id json.RawMessage, messag
 		requestID = uuid.NewString()
 	}
 	data := rpcErrorData{
-		Error:     rpcErrorBody{Code: code, Message: message},
+		Error:     protocol.ErrorBody{Code: code, Message: message},
 		RequestID: requestID,
 	}
 	if len(decisionID) > 0 && decisionID[0] != "" {
@@ -653,6 +655,7 @@ func writeRPCError(w http.ResponseWriter, status int, id json.RawMessage, messag
 		},
 	}
 	w.Header().Set("content-type", "application/json")
+	w.Header().Set("x-umbra-request-id", requestID)
 	w.Header().Set("x-request-id", requestID)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(resp)

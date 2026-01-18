@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -103,32 +104,8 @@ type invocationReceiptBody struct {
 	Enforcement   string            `json:"enforcement.outcome,omitempty"`
 }
 
-type errorBody struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-type blockedResponse struct {
-	Error      errorBody `json:"error"`
-	RequestID  string    `json:"request_id,omitempty"`
-	DecisionID string    `json:"decision_id,omitempty"`
-	TraceID    string    `json:"trace_id,omitempty"`
-}
-
 func writeErrorResponse(w http.ResponseWriter, status int, code, message, requestID, decisionID, traceID string) {
-	if strings.TrimSpace(requestID) == "" {
-		requestID = uuid.NewString()
-	}
-	resp := blockedResponse{
-		Error:      errorBody{Code: code, Message: message},
-		RequestID:  requestID,
-		DecisionID: decisionID,
-		TraceID:    traceID,
-	}
-	w.Header().Set("content-type", "application/json")
-	w.Header().Set("x-request-id", requestID)
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(resp)
+	protocol.WriteErrorResponse(w, status, code, message, requestID, decisionID, traceID, nil)
 }
 
 func writeMethodNotAllowed(w http.ResponseWriter) {
@@ -154,7 +131,10 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 
 	pdp := &PDPClient{
 		BaseURL: getenv("PDP_URL", "http://pdp:8081"),
-		Client:  &http.Client{Timeout: 3 * time.Second},
+		Client: &http.Client{
+			Timeout:   3 * time.Second,
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
+		},
 	}
 
 	db, err := stor.Connect(context.Background(), getenv("DATABASE_URL", "postgres://umbra:umbra@postgres:5432/umbra?sslmode=disable"))

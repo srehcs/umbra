@@ -150,6 +150,9 @@ func TestDecisionContractRuntime(t *testing.T) {
 	if errObj["code"] != "POLICY_INVALID" {
 		t.Fatalf("expected error code POLICY_INVALID, got %v", errObj["code"])
 	}
+	if errOut["request_id"] == "" {
+		t.Fatalf("expected request_id in error response")
+	}
 }
 
 func loadOpenAPI(t *testing.T) *openAPI {
