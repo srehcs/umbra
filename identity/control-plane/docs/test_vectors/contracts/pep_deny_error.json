@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "POLICY_DENIED",
+    "message": "test policy"
+  },
+  "request_id": "req-pep-1",
+  "decision_id": "11111111-1111-1111-1111-111111111111"
+}

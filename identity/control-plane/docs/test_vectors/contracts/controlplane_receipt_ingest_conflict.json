@@ -1,0 +1,13 @@
+{
+  "error": {
+    "code": "CONFLICT",
+    "message": "request_id conflicts with existing receipt",
+    "details": [
+      {
+        "field": "request_id",
+        "message": "already used with different payload"
+      }
+    ]
+  },
+  "request_id": "req-receipt-1"
+}

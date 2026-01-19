@@ -15,7 +15,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/umbra-labs/agent-identity-control-plane/packages/go/policy"
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/protocol"
+	"github.com/umbra-labs/agent-identity-control-plane/packages/go/testutil"
 )
 
 type openAPI struct {
@@ -152,6 +154,97 @@ func TestDecisionContractRuntime(t *testing.T) {
 	}
 	if errOut["request_id"] == "" {
 		t.Fatalf("expected request_id in error response")
+	}
+}
+
+func TestDecisionContractGolden(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+	logger := slog.New(slog.NewJSONHandler(ioDiscard{}, nil))
+	mux := http.NewServeMux()
+	registerV0(mux, logger)
+
+	testutil.RunContractSuite(t, testutil.ContractSuite{
+		Name:    "pdp",
+		Handler: mux,
+		Cases: []testutil.ContractCase{
+			{
+				Name:       "decision default deny",
+				Method:     http.MethodPost,
+				Path:       "/v1/decision",
+				Body:       testutil.LoadGoldenBytes(t, "pdp_decision_request.json"),
+				WantStatus: http.StatusOK,
+				AssertBody: assertDecisionGolden("pdp_decision_response.json"),
+			},
+			{
+				Name:       "invalid tenant",
+				Method:     http.MethodPost,
+				Path:       "/v1/decision",
+				Body:       []byte(`{"tenant":{"tenant_id":"not-a-uuid"},"actor":{"type":"human","id":"user-1"},"tool":{"name":"demo.tool","method":"GET","endpoint":"/demo"}}`),
+				WantStatus: http.StatusBadRequest,
+				WantHeaders: map[string]string{
+					"x-umbra-request-id": testutil.GoldenNonEmpty,
+				},
+				WantError: &testutil.ErrorExpectation{
+					Code:    policy.ErrorCodePolicyInvalid,
+					Message: "invalid tenant_id",
+				},
+				Strict: true,
+			},
+			{
+				Name:      "service unavailable",
+				Method:    http.MethodPost,
+				Path:      "/v1/decision",
+				RequestID: "req-pdp-503",
+				Headers: map[string]string{
+					"x-umbra-trace-id": "trace-503",
+				},
+				Body:       testutil.LoadGoldenBytes(t, "pdp_decision_request.json"),
+				WantStatus: http.StatusServiceUnavailable,
+				WantError: &testutil.ErrorExpectation{
+					Code:      protocol.ErrorCodePolicyUnavailable,
+					Message:   "service unavailable",
+					RequestID: "req-pdp-503",
+					TraceID:   "trace-503",
+				},
+				Strict:     true,
+				AssertBody: assertGoldenError("pdp_error_policy_unavailable.json"),
+				Handler:    pdpUnavailableHandler(),
+			},
+		},
+	})
+}
+
+func assertDecisionGolden(name string) func(t *testing.T, body []byte) {
+	return func(t *testing.T, body []byte) {
+		t.Helper()
+		var expected protocol.DecisionResponse
+		testutil.LoadGoldenInto(t, name, &expected)
+		var actual protocol.DecisionResponse
+		if err := json.Unmarshal(body, &actual); err != nil {
+			t.Fatalf("decode response failed: %v", err)
+		}
+		testutil.AssertDecisionResponse(t, expected, actual)
+	}
+}
+
+func pdpUnavailableHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqID := r.Header.Get("x-umbra-request-id")
+		traceID := r.Header.Get("x-umbra-trace-id")
+		writeError(w, http.StatusServiceUnavailable, protocol.ErrorCodePolicyUnavailable, "service unavailable", reqID, traceID)
+	})
+}
+
+func assertGoldenError(name string) func(t *testing.T, body []byte) {
+	return func(t *testing.T, body []byte) {
+		t.Helper()
+		var expected protocol.ErrorResponse
+		testutil.LoadGoldenInto(t, name, &expected)
+		var actual protocol.ErrorResponse
+		if err := json.Unmarshal(body, &actual); err != nil {
+			t.Fatalf("decode error response failed: %v", err)
+		}
+		testutil.AssertErrorEnvelope(t, actual, expected.Error.Code, expected.Error.Message, expected.RequestID, expected.DecisionID, expected.TraceID)
 	}
 }
 

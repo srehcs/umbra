@@ -178,6 +178,9 @@ export interface components {
       policy_hash?: string;
       policy_version?: number;
     };
+    ActivatePolicyResponse: {
+      ok: boolean;
+    };
     ActivePolicyResponse: {
       id: string;
       name: string;
@@ -493,9 +496,7 @@ export interface operations {
       /** @description OK */
       200: {
         content: {
-          "application/json": {
-            ok?: boolean;
-          };
+          "application/json": components["schemas"]["ActivatePolicyResponse"];
         };
       };
       /** @description Invalid request */

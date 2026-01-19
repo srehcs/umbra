@@ -1,0 +1,11 @@
+go test fuzz v1
+string("invocation")
+string("req-123")
+string("dec-123")
+string("allow")
+string("policy-hash")
+string("tool-name")
+string("POST")
+string("/v1/tools")
+string("ok")
+[]byte("{\"a\":1}")

@@ -1,0 +1,5 @@
+{
+  "receipt_id": "{{uuid}}",
+  "hash": "{{nonempty}}",
+  "prev_hash": "{{any}}"
+}

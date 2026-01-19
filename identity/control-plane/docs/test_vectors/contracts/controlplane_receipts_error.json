@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "STORAGE_UNAVAILABLE",
+    "message": "storage not configured"
+  },
+  "request_id": "req-ctrl-1"
+}

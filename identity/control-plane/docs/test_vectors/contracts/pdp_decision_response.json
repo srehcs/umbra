@@ -1,0 +1,8 @@
+{
+  "decision": "deny",
+  "decision_id": "{{uuid}}",
+  "reason": "storage unavailable (default deny)",
+  "request_id": "req-123",
+  "trace_id": "trace-123",
+  "span_id": "span-123"
+}

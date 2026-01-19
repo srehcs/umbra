@@ -214,9 +214,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  ok: { type: boolean }
+                $ref: '#/components/schemas/ActivatePolicyResponse'
         '400':
           description: Invalid request
           headers:
@@ -706,6 +704,12 @@ components:
         policy_hash: { type: string }
         policy_version: { type: integer }
       required: [decision, reason]
+
+    ActivatePolicyResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+      required: [ok]
 
     ActivePolicyResponse:
       type: object

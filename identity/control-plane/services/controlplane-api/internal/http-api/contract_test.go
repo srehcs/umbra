@@ -73,8 +73,10 @@ func TestControlPlaneContractOpenAPI(t *testing.T) {
 	assertResponseSchemaRef(t, receiptsPath.Get.Responses["400"], "ErrorResponse")
 	assertResponseSchemaRef(t, receiptsPath.Get.Responses["500"], "ErrorResponse")
 	assertRequestSchemaRef(t, receiptsPath.Post.RequestBody, "ReceiptIngestRequest")
+	assertResponseSchemaRef(t, receiptsPath.Post.Responses["200"], "ReceiptIngestResponse")
 	assertResponseSchemaRef(t, receiptsPath.Post.Responses["201"], "ReceiptIngestResponse")
 	assertResponseSchemaRef(t, receiptsPath.Post.Responses["400"], "ErrorResponse")
+	assertResponseSchemaRef(t, receiptsPath.Post.Responses["409"], "ErrorResponse")
 	assertResponseSchemaRef(t, receiptsPath.Post.Responses["500"], "ErrorResponse")
 
 	verifyPath := spec.Paths["/v1/receipts/verify"]
