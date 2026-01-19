@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "POLICY_UNAVAILABLE",
+    "message": "service unavailable"
+  },
+  "request_id": "req-pdp-503",
+  "trace_id": "trace-503"
+}

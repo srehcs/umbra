@@ -1,0 +1,6 @@
+{
+  "tenant": { "tenant_id": "00000000-0000-0000-0000-000000000001" },
+  "actor": { "type": "human", "id": "user-1", "roles": ["developer"] },
+  "tool": { "name": "demo.tool", "method": "GET", "endpoint": "/demo" },
+  "trace": { "request_id": "req-123", "trace_id": "trace-123", "span_id": "span-123" }
+}

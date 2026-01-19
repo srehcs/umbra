@@ -1,0 +1,11 @@
+go test fuzz v1
+string("decision")
+string("req-456")
+string("")
+string("deny")
+string("")
+string("")
+string("GET")
+string("/v1/policies")
+string("error")
+[]byte("null")

@@ -1,0 +1,99 @@
+{
+  "schemas": {
+    "ErrorResponse": {
+      "required": ["error", "request_id"]
+    },
+    "DecisionResponse": {
+      "required": ["decision", "decision_id"]
+    },
+    "ReceiptIngestResponse": {
+      "required": ["receipt_id", "hash"]
+    },
+    "ReceiptVerifyResponse": {
+      "required": ["ok", "checked", "kind"]
+    },
+    "ReceiptExportResponse": {
+      "required": ["schema_version", "items"]
+    },
+    "ActivePolicyResponse": {
+      "required": ["id", "name", "version", "policy_hash", "updated_at"]
+    }
+  },
+  "responses": {
+    "/v1/decision": {
+      "post": {
+        "200": { "schema_ref": "#/components/schemas/DecisionResponse", "content_types": ["application/json"] },
+        "400": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] },
+        "500": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] },
+        "503": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] }
+      }
+    },
+    "/v1/receipts": {
+      "get": {
+        "200": { "schema_ref": "#/components/schemas/ReceiptList", "content_types": ["application/json"] },
+        "400": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] },
+        "500": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] }
+      },
+      "post": {
+        "200": { "schema_ref": "#/components/schemas/ReceiptIngestResponse", "content_types": ["application/json"] },
+        "201": { "schema_ref": "#/components/schemas/ReceiptIngestResponse", "content_types": ["application/json"] },
+        "400": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] },
+        "409": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] },
+        "500": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] }
+      }
+    },
+    "/v1/receipts/verify": {
+      "post": {
+        "200": { "schema_ref": "#/components/schemas/ReceiptVerifyResponse", "content_types": ["application/json"] },
+        "400": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] },
+        "500": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] }
+      }
+    },
+    "/v1/receipts/export": {
+      "get": {
+        "200": { "schema_ref": "#/components/schemas/ReceiptExportResponse", "content_types": ["application/json"] },
+        "400": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] },
+        "500": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] }
+      }
+    },
+    "/v1/tools": {
+      "get": {
+        "200": { "schema_ref": "#/components/schemas/ToolList", "content_types": ["application/json"] },
+        "400": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] },
+        "500": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] }
+      },
+      "post": {
+        "200": { "schema_ref": "#/components/schemas/Tool", "content_types": ["application/json"] },
+        "400": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] },
+        "500": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] }
+      }
+    },
+    "/v1/policies": {
+      "get": {
+        "200": { "schema_ref": "#/components/schemas/PolicyList", "content_types": ["application/json"] },
+        "400": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] },
+        "500": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] }
+      },
+      "post": {
+        "200": { "schema_ref": "#/components/schemas/Policy", "content_types": ["application/json"] },
+        "400": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] },
+        "500": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] }
+      }
+    },
+    "/v1/policies/activate": {
+      "post": {
+        "200": { "schema_ref": "#/components/schemas/ActivatePolicyResponse", "content_types": ["application/json"] },
+        "400": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] },
+        "404": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] },
+        "500": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] }
+      }
+    },
+    "/v1/policies/simulate": {
+      "post": {
+        "200": { "schema_ref": "#/components/schemas/SimulateResponse", "content_types": ["application/json"] },
+        "400": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] },
+        "500": { "schema_ref": "#/components/schemas/ErrorResponse", "content_types": ["application/json"] }
+      }
+    }
+  }
+}

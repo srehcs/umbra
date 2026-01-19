@@ -98,6 +98,14 @@ Integration tests enforce a dedicated test DB (or per-test schema). Override loc
 export UMBRA_ALLOW_NON_TEST_DB=1
 ```
 
+Fuzz and property tests (local)
+```bash
+go test ./packages/go/policy -run TestDoesNotExist -fuzz=FuzzEvaluateABACV0Deterministic -fuzztime=10s
+go test ./packages/go/receipts -run TestDoesNotExist -fuzz=FuzzCanonicalJSONBytesDeterministic -fuzztime=10s
+go test ./packages/go/receipts -run TestDoesNotExist -fuzz=FuzzCanonicalizeIdempotencyPayloadDeterministic -fuzztime=10s
+```
+Seed corpus files live under `packages/go/**/testdata/fuzz/` and are intended to keep fuzzing reproducible.
+
 Stopping the stack
 ```bash
 docker compose -f deployments/docker-compose.yml down

@@ -18,6 +18,8 @@
 ## API contract
 - `api/openapi.yaml`
 - `api/error_envelope.md`
+- `api/compatibility.md`
+- `test_vectors/contracts/`
 
 ## Security
 - `security/path_to_oidc_keycloak.md`
