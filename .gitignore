@@ -28,6 +28,7 @@ git.config
 
 # Go
 .gocache/
+.cache/
 
 # Node/pnpm
 .pnpm/

@@ -30,6 +30,8 @@
 
 ## Receipts integrity
 - `receipts_integrity.md`
+- `receipts_canonicalization.md`
+- `idempotency.md`
 
 ## Navigation
 - `repo_map.md`

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -18,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/protocol"
+	"github.com/umbra-labs/agent-identity-control-plane/packages/go/receipts"
 )
 
 // TestObserveVsEnforceMode tests that PEP_MODE correctly controls behavior for DENY decisions
@@ -129,7 +131,7 @@ func (s *captureStore) LastInvocationHash(_ context.Context, _ uuid.UUID) (strin
 	return "", nil
 }
 
-func (s *captureStore) InsertInvocationReceipt(_ context.Context, _ uuid.UUID, decisionID *uuid.UUID, requestID string, _ string, _ string, _ string, _ string, _ *int, _ int, body json.RawMessage, _ string, _ string, traceID string, spanID string) error {
+func (s *captureStore) InsertInvocationReceiptIdempotent(_ context.Context, _ uuid.UUID, requestID string, decisionID *uuid.UUID, _ string, _ string, _ string, _ string, _ *int, _ int, body json.RawMessage, traceID string, spanID string, _ time.Time, _ string) (receipts.IdempotencyOutcome, error) {
 	s.captured = capturedInvocation{
 		requestID:  requestID,
 		decisionID: decisionID,
@@ -137,7 +139,7 @@ func (s *captureStore) InsertInvocationReceipt(_ context.Context, _ uuid.UUID, d
 		spanID:     spanID,
 		body:       append(json.RawMessage(nil), body...),
 	}
-	return nil
+	return receipts.IdempotencyInserted, nil
 }
 
 func TestInvocationCorrelationIDs(t *testing.T) {

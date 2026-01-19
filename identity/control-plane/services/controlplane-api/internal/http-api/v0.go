@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"bytes"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -11,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/policy"
@@ -84,6 +84,8 @@ type receiptIngestResponse struct {
 	Hash      string `json:"hash"`
 	PrevHash  string `json:"prev_hash,omitempty"`
 }
+
+const requestIDConflictMessage = "request_id conflicts with existing receipt"
 
 func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 	// Wire DB (V0 simple): create store per request via global singleton in closure.
@@ -627,12 +629,19 @@ func (s *Server) handleReceiptsIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var compact bytes.Buffer
-	if err := json.Compact(&compact, body.Body); err != nil {
+	canonicalBytes, err := receipts.CanonicalJSONBytes(body.Body)
+	if err != nil {
+		writeErrorResponse(w, http.StatusBadRequest, "RECEIPT_INVALID", receiptCanonicalizationError(err), nil, r)
+		return
+	}
+	idempotencyBytes, err := canonicalizeIdempotencyPayload(body, canonicalBytes)
+	if err != nil {
 		writeErrorResponse(w, http.StatusBadRequest, "RECEIPT_INVALID", "receipt body must be valid JSON", nil, r)
 		return
 	}
-	compactBody := json.RawMessage(compact.Bytes())
+	canonicalBody := json.RawMessage(canonicalBytes)
+	idempotencyBody := json.RawMessage(idempotencyBytes)
+	dedupeSince := receipts.RequestIDDedupeSince(time.Now().UTC(), requestIDDedupeWindow(s.Logger))
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -644,19 +653,22 @@ func (s *Server) handleReceiptsIngest(w http.ResponseWriter, r *http.Request) {
 			writeErrorResponse(w, http.StatusBadRequest, "RECEIPT_INVALID", "invalid decision_id", nil, r)
 			return
 		}
-		prev, err := s.Store.LastDecisionHash(ctx, tenant)
+		result, err := s.Store.InsertDecisionReceiptIdempotent(ctx, tenant, body.RequestID, decisionID, body.PolicyHash, body.Decision, canonicalBody, idempotencyBody, body.TraceID, body.SpanID, dedupeSince, receiptChainLockScope(s.Logger))
 		if err != nil {
 			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
-		hash := receipts.HashBytes(append([]byte(prev), compactBody...))
-		id, err := s.Store.InsertDecisionReceipt(ctx, tenant, decisionID, body.RequestID, body.PolicyHash, body.Decision, compactBody, prev, hash, body.TraceID, body.SpanID)
-		if err != nil {
-			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
+		if result.Outcome == receipts.IdempotencyReplayed {
+			w.WriteHeader(http.StatusOK)
+			writeJSON(w, receiptIngestResponse{ReceiptID: result.Record.ID.String(), Hash: result.Record.Hash, PrevHash: result.Record.PrevHash})
+			return
+		}
+		if result.Outcome == receipts.IdempotencyConflict {
+			writeErrorResponse(w, http.StatusConflict, protocol.ErrorCodeConflict, requestIDConflictMessage, requestIDConflictDetails(), r)
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
-		writeJSON(w, receiptIngestResponse{ReceiptID: id.String(), Hash: hash, PrevHash: prev})
+		writeJSON(w, receiptIngestResponse{ReceiptID: result.Record.ID.String(), Hash: result.Record.Hash, PrevHash: result.Record.PrevHash})
 	case "invocation":
 		var decisionID *uuid.UUID
 		if body.DecisionID != "" {
@@ -667,23 +679,26 @@ func (s *Server) handleReceiptsIngest(w http.ResponseWriter, r *http.Request) {
 			}
 			decisionID = &parsed
 		}
-		prev, err := s.Store.LastInvocationHash(ctx, tenant)
-		if err != nil {
-			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
-			return
-		}
-		hash := receipts.HashBytes(append([]byte(prev), compactBody...))
 		latencyMs := 0
 		if body.LatencyMs != nil {
 			latencyMs = *body.LatencyMs
 		}
-		id, err := s.Store.InsertInvocationReceipt(ctx, tenant, decisionID, body.RequestID, body.ToolName, body.Method, body.Path, body.Outcome, body.StatusCode, latencyMs, compactBody, prev, hash, body.TraceID, body.SpanID)
+		result, err := s.Store.InsertInvocationReceiptIdempotent(ctx, tenant, body.RequestID, decisionID, body.ToolName, body.Method, body.Path, body.Outcome, body.StatusCode, latencyMs, canonicalBody, idempotencyBody, body.TraceID, body.SpanID, dedupeSince, receiptChainLockScope(s.Logger))
 		if err != nil {
 			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
+		if result.Outcome == receipts.IdempotencyReplayed {
+			w.WriteHeader(http.StatusOK)
+			writeJSON(w, receiptIngestResponse{ReceiptID: result.Record.ID.String(), Hash: result.Record.Hash, PrevHash: result.Record.PrevHash})
+			return
+		}
+		if result.Outcome == receipts.IdempotencyConflict {
+			writeErrorResponse(w, http.StatusConflict, protocol.ErrorCodeConflict, requestIDConflictMessage, requestIDConflictDetails(), r)
+			return
+		}
 		w.WriteHeader(http.StatusCreated)
-		writeJSON(w, receiptIngestResponse{ReceiptID: id.String(), Hash: hash, PrevHash: prev})
+		writeJSON(w, receiptIngestResponse{ReceiptID: result.Record.ID.String(), Hash: result.Record.Hash, PrevHash: result.Record.PrevHash})
 	default:
 		writeErrorResponse(w, http.StatusBadRequest, "RECEIPT_INVALID", "invalid kind", nil, r)
 	}
@@ -756,6 +771,39 @@ func writeErrorResponse(w http.ResponseWriter, status int, code string, message 
 	protocol.WriteErrorResponse(w, status, code, message, reqID, "", traceID, errs)
 }
 
+func requestIDConflictDetails() []fieldError {
+	return []fieldError{{Field: "request_id", Message: "already used with different payload"}}
+}
+
+func receiptCanonicalizationError(err error) string {
+	switch {
+	case errors.Is(err, receipts.ErrCanonicalJSONNonASCII):
+		return "receipt body must be ASCII-only JSON"
+	case errors.Is(err, receipts.ErrCanonicalJSONFloat):
+		return "receipt body must not include floating point numbers"
+	case errors.Is(err, receipts.ErrCanonicalJSONTrailing):
+		return "receipt body must be a single JSON value"
+	default:
+		return "receipt body must be valid JSON"
+	}
+}
+
+func canonicalizeIdempotencyPayload(body receiptIngestRequest, canonicalBody []byte) ([]byte, error) {
+	payload := receipts.IdempotencyPayload{
+		Kind:       body.Kind,
+		RequestID:  body.RequestID,
+		DecisionID: body.DecisionID,
+		Decision:   body.Decision,
+		PolicyHash: body.PolicyHash,
+		ToolName:   body.ToolName,
+		Method:     body.Method,
+		Path:       body.Path,
+		Outcome:    body.Outcome,
+		Body:       json.RawMessage(canonicalBody),
+	}
+	return receipts.CanonicalizeIdempotencyPayload(payload)
+}
+
 func writeMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
 	writeErrorResponse(w, http.StatusMethodNotAllowed, protocol.ErrorCodeMethodNotAllowed, "method not allowed", nil, r)
 }
@@ -790,6 +838,39 @@ func ensureRequestID(r *http.Request) string {
 	r.Header.Set("x-umbra-request-id", reqID)
 	r.Header.Set("x-request-id", reqID)
 	return reqID
+}
+
+var dedupeWindowOnce sync.Once
+var dedupeWindow time.Duration
+var chainScopeOnce sync.Once
+var chainScope string
+
+func requestIDDedupeWindow(logger *slog.Logger) time.Duration {
+	dedupeWindowOnce.Do(func() {
+		window, err := receipts.ResolveRequestIDDedupeWindow(os.Getenv("UMBRA_REQUEST_ID_DEDUPE_WINDOW"))
+		if err != nil {
+			logger.Warn("invalid UMBRA_REQUEST_ID_DEDUPE_WINDOW; using default", "err", err)
+		}
+		dedupeWindow = window
+	})
+	if dedupeWindow == 0 {
+		return receipts.DefaultRequestIDDedupeWindow
+	}
+	return dedupeWindow
+}
+
+func receiptChainLockScope(logger *slog.Logger) string {
+	chainScopeOnce.Do(func() {
+		scope, err := receipts.ResolveChainLockScope(os.Getenv("UMBRA_RECEIPT_CHAIN_LOCK_SCOPE"))
+		if err != nil {
+			logger.Warn("invalid UMBRA_RECEIPT_CHAIN_LOCK_SCOPE; using default", "err", err)
+		}
+		chainScope = scope
+	})
+	if chainScope == "" {
+		return "tenant"
+	}
+	return chainScope
 }
 
 func (s *Server) handleReceiptsExport(w http.ResponseWriter, r *http.Request) {

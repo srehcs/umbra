@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -84,7 +85,7 @@ func (c *PDPClient) Decide(ctx context.Context, payload protocol.DecisionRequest
 
 type invocationStore interface {
 	LastInvocationHash(ctx context.Context, tenant uuid.UUID) (string, error)
-	InsertInvocationReceipt(ctx context.Context, tenant uuid.UUID, decisionID *uuid.UUID, requestID string, toolName string, method string, path string, outcome string, statusCode *int, latencyMs int, body json.RawMessage, prevHash string, hash string, traceID string, spanID string) error
+	InsertInvocationReceiptIdempotent(ctx context.Context, tenant uuid.UUID, requestID string, decisionID *uuid.UUID, toolName string, method string, path string, outcome string, statusCode *int, latencyMs int, body json.RawMessage, traceID string, spanID string, since time.Time, chainScope string) (receipts.IdempotencyOutcome, error)
 }
 
 type rpcRequest struct {
@@ -607,15 +608,17 @@ func writeInvocationReceipt(ctx context.Context, logger *slog.Logger, store invo
 		return
 	}
 
-	prev, err := store.LastInvocationHash(ctx, tenant)
+		since := receipts.RequestIDDedupeSince(time.Now().UTC(), requestIDDedupeWindow(logger))
+		outcomeResult, err := store.InsertInvocationReceiptIdempotent(ctx, tenant, requestID, decisionID, toolIdentifier(mcpCtx.Server, mcpCtx.Tool), mcpCtx.Method, mcpCtx.Tool, outcome, statusCode, totalLatency, bodyBytes, traceID, spanID, since, receiptChainLockScope(logger))
 	if err != nil {
-		logger.Error("receipt prev hash lookup failed", "err", err)
+		logger.Error("receipt insert failed", "err", err)
 		return
 	}
-
-	hash := receipts.HashBytes(append([]byte(prev), bodyBytes...))
-	if err := store.InsertInvocationReceipt(ctx, tenant, decisionID, requestID, toolIdentifier(mcpCtx.Server, mcpCtx.Tool), mcpCtx.Method, mcpCtx.Tool, outcome, statusCode, totalLatency, bodyBytes, prev, hash, traceID, spanID); err != nil {
-		logger.Error("receipt insert failed", "err", err)
+	switch outcomeResult {
+	case receipts.IdempotencyReplayed:
+		logger.Info("receipt idempotency replay", "request_id", requestID)
+	case receipts.IdempotencyConflict:
+		logger.Error("receipt idempotency conflict", "request_id", requestID)
 	}
 }
 
@@ -632,6 +635,40 @@ func toolIdentifier(serverName, toolName string) string {
 	}
 	return serverName + ":" + toolName
 }
+
+var dedupeWindowOnce sync.Once
+var dedupeWindow time.Duration
+var chainScopeOnce sync.Once
+var chainScope string
+
+func requestIDDedupeWindow(logger *slog.Logger) time.Duration {
+	dedupeWindowOnce.Do(func() {
+		window, err := receipts.ResolveRequestIDDedupeWindow(getenv("UMBRA_REQUEST_ID_DEDUPE_WINDOW", ""))
+		if err != nil {
+			logger.Warn("invalid UMBRA_REQUEST_ID_DEDUPE_WINDOW; using default", "err", err)
+		}
+		dedupeWindow = window
+	})
+	if dedupeWindow == 0 {
+		return receipts.DefaultRequestIDDedupeWindow
+	}
+	return dedupeWindow
+}
+
+func receiptChainLockScope(logger *slog.Logger) string {
+	chainScopeOnce.Do(func() {
+		scope, err := receipts.ResolveChainLockScope(getenv("UMBRA_RECEIPT_CHAIN_LOCK_SCOPE", ""))
+		if err != nil {
+			logger.Warn("invalid UMBRA_RECEIPT_CHAIN_LOCK_SCOPE; using default", "err", err)
+		}
+		chainScope = scope
+	})
+	if chainScope == "" {
+		return "tenant"
+	}
+	return chainScope
+}
+
 
 func writeRPCError(w http.ResponseWriter, status int, id json.RawMessage, message, code, requestID string, decisionID ...string) {
 	if strings.TrimSpace(requestID) == "" {

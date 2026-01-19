@@ -61,6 +61,12 @@ curl -s \
   http://localhost:3000/api/auth/session | jq .
 ```
 
+Receipt idempotency config
+```bash
+export UMBRA_REQUEST_ID_DEDUPE_WINDOW="24h"
+export UMBRA_RECEIPT_CHAIN_LOCK_SCOPE="tenant" # or "day"
+```
+
 E2E smoke tests
 ```bash
 make e2e

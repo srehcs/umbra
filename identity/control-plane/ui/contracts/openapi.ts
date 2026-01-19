@@ -253,6 +253,7 @@ export interface components {
     ReceiptIngestBase: {
       /** @enum {string} */
       kind: "decision" | "invocation";
+      /** @description Idempotency key for receipt ingest (tenant-scoped). */
       request_id: string;
       decision_id?: string;
       trace_id?: string;
@@ -636,6 +637,12 @@ export interface operations {
       };
     };
     responses: {
+      /** @description Idempotent replay (existing receipt) */
+      200: {
+        content: {
+          "application/json": components["schemas"]["ReceiptIngestResponse"];
+        };
+      };
       /** @description Created */
       201: {
         content: {
@@ -644,6 +651,15 @@ export interface operations {
       };
       /** @description Invalid request */
       400: {
+        headers: {
+          "x-umbra-request-id": components["headers"]["RequestId"];
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Request ID conflict */
+      409: {
         headers: {
           "x-umbra-request-id": components["headers"]["RequestId"];
         };
