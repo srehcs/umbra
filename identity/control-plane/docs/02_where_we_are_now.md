@@ -17,6 +17,7 @@ This document is a reality check: **what is implemented in this repo** vs **what
 - **MCP adapter**:
   - intercepts MCP tool calls (`tools/call`) and converts to PDP requests
   - enforces allow/deny and emits invocation receipts
+- **Receipt idempotency**: request_id dedupe window for receipt ingest and internal receipt writers.
 - **UI (Next.js + ShadCN)**:
   - tools
   - policies (author + activate)

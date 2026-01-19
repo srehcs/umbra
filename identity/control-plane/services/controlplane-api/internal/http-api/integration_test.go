@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/policy"
+	"github.com/umbra-labs/agent-identity-control-plane/packages/go/protocol"
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/testutil"
 	"github.com/umbra-labs/agent-identity-control-plane/services/controlplane-api/internal/storage"
 )
@@ -222,6 +224,264 @@ func TestReceiptIngestDecisionChain(t *testing.T) {
 	}
 }
 
+func TestReceiptIngestIdempotency(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("UMBRA_TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("UMBRA_TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	db, cleanup := testutil.ConnectIsolatedTestDB(t, dsn)
+	defer cleanup()
+
+	if err := applySchema(t, db.Pool); err != nil {
+		t.Fatalf("schema setup failed: %v", err)
+	}
+
+	tenantID := createTenant(t, db.Pool, "receipt-idem-tenant")
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	server := &Server{Logger: logger, Store: storage.New(db)}
+
+	body := map[string]interface{}{
+		"actor": map[string]interface{}{"id": "user-1", "type": "human"},
+		"tool":  map[string]interface{}{"name": "demo.tool", "method": "GET", "endpoint": "/demo"},
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	base := receiptIngestRequest{
+		Kind:       "decision",
+		RequestID:  "req-idem-1",
+		DecisionID: uuid.NewString(),
+		Decision:   "allow",
+		PolicyHash: "policy-hash-1",
+		Body:       bodyBytes,
+	}
+
+	first := ingestReceiptRaw(t, server, tenantID, base)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("receipt ingest failed: %d %s", first.Code, first.Body.String())
+	}
+	var firstResp receiptIngestResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstResp); err != nil {
+		t.Fatalf("parse receipt ingest response: %v", err)
+	}
+
+	second := ingestReceiptRaw(t, server, tenantID, base)
+	if second.Code != http.StatusOK {
+		t.Fatalf("expected idempotent replay, got %d %s", second.Code, second.Body.String())
+	}
+	var secondResp receiptIngestResponse
+	if err := json.Unmarshal(second.Body.Bytes(), &secondResp); err != nil {
+		t.Fatalf("parse replay response: %v", err)
+	}
+	if secondResp.ReceiptID != firstResp.ReceiptID || secondResp.Hash != firstResp.Hash {
+		t.Fatalf("expected replay to return original receipt")
+	}
+
+	var count int
+	if err := db.Pool.QueryRow(ctx, `
+    SELECT COUNT(*)
+    FROM receipts_decision
+    WHERE tenant_id=$1 AND request_id=$2`, tenantID, base.RequestID).Scan(&count); err != nil {
+		t.Fatalf("count receipts failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 receipt, got %d", count)
+	}
+
+	conflict := base
+	conflict.Decision = "deny"
+	third := ingestReceiptRaw(t, server, tenantID, conflict)
+	if third.Code != http.StatusConflict {
+		t.Fatalf("expected conflict, got %d %s", third.Code, third.Body.String())
+	}
+	var errResp protocol.ErrorResponse
+	if err := json.Unmarshal(third.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("parse conflict response: %v", err)
+	}
+	if errResp.Error.Code != protocol.ErrorCodeConflict {
+		t.Fatalf("expected conflict error code, got %s", errResp.Error.Code)
+	}
+}
+
+func TestReceiptIngestIdempotencyCanonicalBody(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("UMBRA_TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("UMBRA_TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	db, cleanup := testutil.ConnectIsolatedTestDB(t, dsn)
+	defer cleanup()
+
+	if err := applySchema(t, db.Pool); err != nil {
+		t.Fatalf("schema setup failed: %v", err)
+	}
+
+	tenantID := createTenant(t, db.Pool, "receipt-idem-canonical")
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	server := &Server{Logger: logger, Store: storage.New(db)}
+
+	bodyA := json.RawMessage(`{"b":2,"a":{"d":4,"c":3}}`)
+	bodyB := json.RawMessage(`{"a":{"c":3,"d":4},"b":2}`)
+
+	base := receiptIngestRequest{
+		Kind:      "invocation",
+		RequestID: "req-idem-canonical-1",
+		ToolName:  "demo.tool",
+		Method:    "GET",
+		Path:      "/demo",
+		Outcome:   "success",
+		LatencyMs: intPtr(12),
+		Body:      bodyA,
+	}
+
+	first := ingestReceiptRaw(t, server, tenantID, base)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("receipt ingest failed: %d %s", first.Code, first.Body.String())
+	}
+	var firstResp receiptIngestResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstResp); err != nil {
+		t.Fatalf("parse receipt ingest response: %v", err)
+	}
+
+	replay := base
+	replay.Body = bodyB
+	second := ingestReceiptRaw(t, server, tenantID, replay)
+	if second.Code != http.StatusOK {
+		t.Fatalf("expected idempotent replay, got %d %s", second.Code, second.Body.String())
+	}
+	var secondResp receiptIngestResponse
+	if err := json.Unmarshal(second.Body.Bytes(), &secondResp); err != nil {
+		t.Fatalf("parse replay response: %v", err)
+	}
+	if secondResp.ReceiptID != firstResp.ReceiptID || secondResp.Hash != firstResp.Hash {
+		t.Fatalf("expected replay to return original receipt")
+	}
+
+	var count int
+	if err := db.Pool.QueryRow(ctx, `
+    SELECT COUNT(*)
+    FROM receipts_invocation
+    WHERE tenant_id=$1 AND request_id=$2`, tenantID, base.RequestID).Scan(&count); err != nil {
+		t.Fatalf("count receipts failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 receipt, got %d", count)
+	}
+}
+
+func intPtr(v int) *int {
+	return &v
+}
+
+func TestReceiptIngestIdempotencyConcurrent(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("UMBRA_TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("UMBRA_TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	db, cleanup := testutil.ConnectIsolatedTestDB(t, dsn)
+	defer cleanup()
+
+	if err := applySchema(t, db.Pool); err != nil {
+		t.Fatalf("schema setup failed: %v", err)
+	}
+
+	tenantID := createTenant(t, db.Pool, "receipt-idem-concurrent")
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	server := &Server{Logger: logger, Store: storage.New(db)}
+
+	reqBody := json.RawMessage(`{"actor":{"id":"user-1","type":"human"}}`)
+	base := receiptIngestRequest{
+		Kind:       "decision",
+		RequestID:  "req-idem-concurrent-1",
+		DecisionID: uuid.NewString(),
+		Decision:   "allow",
+		PolicyHash: "policy-hash-1",
+		Body:       reqBody,
+	}
+	bodyBytes, _ := json.Marshal(base)
+
+	start := make(chan struct{})
+	results := make(chan *httptest.ResponseRecorder, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			results <- ingestReceiptRawBytes(server, tenantID, bodyBytes)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	statuses := map[int]int{}
+	for resp := range results {
+		statuses[resp.Code]++
+	}
+	if statuses[http.StatusCreated] != 1 || statuses[http.StatusOK] != 1 {
+		t.Fatalf("expected one created and one replay, got %+v", statuses)
+	}
+
+	var count int
+	if err := db.Pool.QueryRow(ctx, `
+    SELECT COUNT(*)
+    FROM receipts_decision
+    WHERE tenant_id=$1 AND request_id=$2`, tenantID, base.RequestID).Scan(&count); err != nil {
+		t.Fatalf("count receipts failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 receipt, got %d", count)
+	}
+}
+
+func TestReceiptIngestRejectsInvalidJSONNumbers(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("UMBRA_TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("UMBRA_TEST_DATABASE_URL not set")
+	}
+	db, cleanup := testutil.ConnectIsolatedTestDB(t, dsn)
+	defer cleanup()
+
+	if err := applySchema(t, db.Pool); err != nil {
+		t.Fatalf("schema setup failed: %v", err)
+	}
+
+	tenantID := createTenant(t, db.Pool, "receipt-invalid-json")
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	server := &Server{Logger: logger, Store: storage.New(db)}
+
+	base := receiptIngestRequest{
+		Kind:       "decision",
+		RequestID:  "req-invalid-json-1",
+		DecisionID: uuid.NewString(),
+		Decision:   "allow",
+		PolicyHash: "policy-hash-1",
+	}
+
+	cases := []struct {
+		name string
+		body json.RawMessage
+	}{
+		{name: "float", body: json.RawMessage(`{"latency_ms":1.25}`)},
+		{name: "non_ascii", body: json.RawMessage(`{"msg":"caf\u00e9"}`)},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			req := base
+			req.RequestID = base.RequestID + "-" + tc.name
+			req.Body = tc.body
+			resp := ingestReceiptRaw(t, server, tenantID, req)
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("expected bad request, got %d %s", resp.Code, resp.Body.String())
+			}
+		})
+	}
+}
+
 func applySchema(t *testing.T, pool *pgxpool.Pool) error {
 	t.Helper()
 	return testutil.ApplySchemaForTests(t, pool)
@@ -327,11 +587,7 @@ func listPoliciesViaAPI(t *testing.T, server *Server, tenant uuid.UUID) []policy
 
 func ingestReceipt(t *testing.T, server *Server, tenant uuid.UUID, body receiptIngestRequest) receiptIngestResponse {
 	t.Helper()
-	bodyBytes, _ := json.Marshal(body)
-	req := httptest.NewRequest("POST", "/v1/receipts", bytes.NewReader(bodyBytes))
-	req.Header.Set("x-umbra-tenant-id", tenant.String())
-	w := httptest.NewRecorder()
-	server.handleReceipts(w, req)
+	w := ingestReceiptRaw(t, server, tenant, body)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("receipt ingest failed: %d %s", w.Code, w.Body.String())
 	}
@@ -340,4 +596,18 @@ func ingestReceipt(t *testing.T, server *Server, tenant uuid.UUID, body receiptI
 		t.Fatalf("parse receipt ingest response: %v", err)
 	}
 	return out
+}
+
+func ingestReceiptRaw(t *testing.T, server *Server, tenant uuid.UUID, body receiptIngestRequest) *httptest.ResponseRecorder {
+	t.Helper()
+	bodyBytes, _ := json.Marshal(body)
+	return ingestReceiptRawBytes(server, tenant, bodyBytes)
+}
+
+func ingestReceiptRawBytes(server *Server, tenant uuid.UUID, body []byte) *httptest.ResponseRecorder {
+	req := httptest.NewRequest("POST", "/v1/receipts", bytes.NewReader(body))
+	req.Header.Set("x-umbra-tenant-id", tenant.String())
+	w := httptest.NewRecorder()
+	server.handleReceipts(w, req)
+	return w
 }

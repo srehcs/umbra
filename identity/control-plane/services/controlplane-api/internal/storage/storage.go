@@ -1,9 +1,12 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"time"
@@ -239,6 +242,218 @@ func (s *Store) LastInvocationHash(ctx context.Context, tenant uuid.UUID) (strin
 	return *h, nil
 }
 
+type ReceiptIdempotencyRecord struct {
+	ID            uuid.UUID
+	Hash          string
+	PrevHash      string
+	BodyCanonical []byte
+	Payload       receipts.IdempotencyPayload
+}
+
+func (s *Store) FindDecisionReceiptByRequestID(ctx context.Context, tenant uuid.UUID, requestID string, since time.Time) (ReceiptIdempotencyRecord, bool, error) {
+	var rec ReceiptIdempotencyRecord
+	var prev *string
+	err := s.db.QueryRow(ctx, `
+    SELECT id, hash, prev_hash, body_canonical, decision_id, policy_hash, decision, request_id
+    FROM receipts_decision
+    WHERE tenant_id=$1 AND request_id=$2 AND ts >= $3
+    ORDER BY ts DESC
+    LIMIT 1`, tenant, requestID, since).Scan(&rec.ID, &rec.Hash, &prev, &rec.BodyCanonical, &rec.Payload.DecisionID, &rec.Payload.PolicyHash, &rec.Payload.Decision, &rec.Payload.RequestID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return rec, false, nil
+		}
+		return rec, false, err
+	}
+	if prev != nil {
+		rec.PrevHash = *prev
+	}
+	rec.Payload.Kind = "decision"
+	rec.Payload.Body = json.RawMessage(rec.BodyCanonical)
+	return rec, true, nil
+}
+
+func (s *Store) FindInvocationReceiptByRequestID(ctx context.Context, tenant uuid.UUID, requestID string, since time.Time) (ReceiptIdempotencyRecord, bool, error) {
+	var rec ReceiptIdempotencyRecord
+	var prev *string
+	var decisionID sql.NullString
+	err := s.db.QueryRow(ctx, `
+    SELECT id, hash, prev_hash, body_canonical, decision_id, tool_name, method, path, outcome, request_id
+    FROM receipts_invocation
+    WHERE tenant_id=$1 AND request_id=$2 AND ts >= $3
+    ORDER BY ts DESC
+    LIMIT 1`, tenant, requestID, since).Scan(&rec.ID, &rec.Hash, &prev, &rec.BodyCanonical, &decisionID, &rec.Payload.ToolName, &rec.Payload.Method, &rec.Payload.Path, &rec.Payload.Outcome, &rec.Payload.RequestID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return rec, false, nil
+		}
+		return rec, false, err
+	}
+	if prev != nil {
+		rec.PrevHash = *prev
+	}
+	rec.Payload.Kind = "invocation"
+	if decisionID.Valid {
+		rec.Payload.DecisionID = decisionID.String
+	}
+	rec.Payload.Body = json.RawMessage(rec.BodyCanonical)
+	return rec, true, nil
+}
+
+type IdempotentInsertResult struct {
+	Outcome receipts.IdempotencyOutcome
+	Record  ReceiptIdempotencyRecord
+}
+
+func (s *Store) InsertDecisionReceiptIdempotent(
+	ctx context.Context,
+	tenant uuid.UUID,
+	requestID string,
+	decisionID uuid.UUID,
+	policyHash string,
+	decision string,
+	body json.RawMessage,
+	idemBody json.RawMessage,
+	traceID string,
+	spanID string,
+	since time.Time,
+	chainScope string,
+) (IdempotentInsertResult, error) {
+	return s.insertReceiptIdempotent(ctx, tenant, "decision", requestID, since, idemBody, chainScope, func(tx pgx.Tx) (ReceiptIdempotencyRecord, error) {
+		prev, err := lastDecisionHashTx(ctx, tx, tenant)
+		if err != nil {
+			return ReceiptIdempotencyRecord{}, err
+		}
+		hash := receipts.HashBytes(append([]byte(prev), body...))
+		var id uuid.UUID
+		err = tx.QueryRow(ctx, `
+    INSERT INTO receipts_decision(tenant_id, decision_id, request_id, policy_hash, decision, body_json, body_canonical, prev_hash, hash, trace_id, span_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+    RETURNING id`,
+			tenant, decisionID, nullIfEmpty(requestID), policyHash, decision, body, body, nullIfEmpty(prev), hash, nullIfEmpty(traceID), nullIfEmpty(spanID),
+		).Scan(&id)
+		if err != nil {
+			return ReceiptIdempotencyRecord{}, err
+		}
+		return ReceiptIdempotencyRecord{ID: id, Hash: hash, PrevHash: prev, BodyCanonical: body}, nil
+	})
+}
+
+func (s *Store) InsertInvocationReceiptIdempotent(
+	ctx context.Context,
+	tenant uuid.UUID,
+	requestID string,
+	decisionID *uuid.UUID,
+	toolName string,
+	method string,
+	path string,
+	outcome string,
+	statusCode *int,
+	latencyMs int,
+	body json.RawMessage,
+	idemBody json.RawMessage,
+	traceID string,
+	spanID string,
+	since time.Time,
+	chainScope string,
+) (IdempotentInsertResult, error) {
+	return s.insertReceiptIdempotent(ctx, tenant, "invocation", requestID, since, idemBody, chainScope, func(tx pgx.Tx) (ReceiptIdempotencyRecord, error) {
+		prev, err := lastInvocationHashTx(ctx, tx, tenant)
+		if err != nil {
+			return ReceiptIdempotencyRecord{}, err
+		}
+		hash := receipts.HashBytes(append([]byte(prev), body...))
+		var id uuid.UUID
+		err = tx.QueryRow(ctx, `
+    INSERT INTO receipts_invocation(tenant_id, decision_id, request_id, tool_name, method, path, outcome, status_code, latency_ms, body_json, body_canonical, prev_hash, hash, trace_id, span_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+    RETURNING id`,
+			tenant,
+			decisionID,
+			nullIfEmpty(requestID),
+			toolName,
+			method,
+			path,
+			outcome,
+			statusCode,
+			latencyMs,
+			body,
+			body,
+			nullIfEmpty(prev),
+			hash,
+			nullIfEmpty(traceID),
+			nullIfEmpty(spanID),
+		).Scan(&id)
+		if err != nil {
+			return ReceiptIdempotencyRecord{}, err
+		}
+		return ReceiptIdempotencyRecord{ID: id, Hash: hash, PrevHash: prev, BodyCanonical: body}, nil
+	})
+}
+
+func (s *Store) insertReceiptIdempotent(
+	ctx context.Context,
+	tenant uuid.UUID,
+	kind string,
+	requestID string,
+	since time.Time,
+	idemBody json.RawMessage,
+	chainScope string,
+	insert func(pgx.Tx) (ReceiptIdempotencyRecord, error),
+) (IdempotentInsertResult, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return IdempotentInsertResult{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if strings.TrimSpace(requestID) != "" {
+		lockKey1, lockKey2 := receipts.AdvisoryLockPair(tenant.String(), kind, requestID)
+		if err := stor.AdvisoryLockTx(ctx, tx, lockKey1, lockKey2); err != nil {
+			return IdempotentInsertResult{}, err
+		}
+
+		var existing ReceiptIdempotencyRecord
+		var ok bool
+		switch kind {
+		case "decision":
+			existing, ok, err = findDecisionReceiptByRequestIDTx(ctx, tx, tenant, requestID, since)
+		case "invocation":
+			existing, ok, err = findInvocationReceiptByRequestIDTx(ctx, tx, tenant, requestID, since)
+		}
+		if err != nil {
+			return IdempotentInsertResult{}, err
+		}
+		if ok {
+			existingBytes, err := receipts.CanonicalizeIdempotencyPayload(existing.Payload)
+			if err != nil {
+				return IdempotentInsertResult{}, err
+			}
+			if len(existingBytes) == 0 || !bytes.Equal(existingBytes, idemBody) {
+				return IdempotentInsertResult{Outcome: receipts.IdempotencyConflict}, nil
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return IdempotentInsertResult{}, err
+			}
+			return IdempotentInsertResult{Outcome: receipts.IdempotencyReplayed, Record: existing}, nil
+		}
+	}
+
+	lockKey1, lockKey2 := receipts.ChainLockPair(tenant.String(), kind, time.Now().UTC(), chainScope)
+	if err := stor.AdvisoryLockTx(ctx, tx, lockKey1, lockKey2); err != nil {
+		return IdempotentInsertResult{}, err
+	}
+
+	record, err := insert(tx)
+	if err != nil {
+		return IdempotentInsertResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return IdempotentInsertResult{}, err
+	}
+	return IdempotentInsertResult{Outcome: receipts.IdempotencyInserted, Record: record}, nil
+}
+
 func (s *Store) InsertDecisionReceipt(ctx context.Context,
 	tenant uuid.UUID,
 	decisionID uuid.UUID,
@@ -306,6 +521,92 @@ func nullIfEmpty(s string) interface{} {
 		return nil
 	}
 	return s
+}
+
+func lastDecisionHashTx(ctx context.Context, tx pgx.Tx, tenant uuid.UUID) (string, error) {
+	var h *string
+	if err := tx.QueryRow(ctx, `
+    SELECT hash FROM receipts_decision
+    WHERE tenant_id=$1
+    ORDER BY ts DESC
+    LIMIT 1`, tenant).Scan(&h); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	if h == nil {
+		return "", nil
+	}
+	return *h, nil
+}
+
+func lastInvocationHashTx(ctx context.Context, tx pgx.Tx, tenant uuid.UUID) (string, error) {
+	var h *string
+	if err := tx.QueryRow(ctx, `
+    SELECT hash FROM receipts_invocation
+    WHERE tenant_id=$1
+    ORDER BY ts DESC
+    LIMIT 1`, tenant).Scan(&h); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	if h == nil {
+		return "", nil
+	}
+	return *h, nil
+}
+
+func findDecisionReceiptByRequestIDTx(ctx context.Context, tx pgx.Tx, tenant uuid.UUID, requestID string, since time.Time) (ReceiptIdempotencyRecord, bool, error) {
+	var rec ReceiptIdempotencyRecord
+	var prev *string
+	err := tx.QueryRow(ctx, `
+    SELECT id, hash, prev_hash, body_canonical, decision_id, policy_hash, decision, request_id
+    FROM receipts_decision
+    WHERE tenant_id=$1 AND request_id=$2 AND ts >= $3
+    ORDER BY ts DESC
+    LIMIT 1`, tenant, requestID, since).Scan(&rec.ID, &rec.Hash, &prev, &rec.BodyCanonical, &rec.Payload.DecisionID, &rec.Payload.PolicyHash, &rec.Payload.Decision, &rec.Payload.RequestID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return rec, false, nil
+		}
+		return rec, false, err
+	}
+	if prev != nil {
+		rec.PrevHash = *prev
+	}
+	rec.Payload.Kind = "decision"
+	rec.Payload.Body = json.RawMessage(rec.BodyCanonical)
+	return rec, true, nil
+}
+
+func findInvocationReceiptByRequestIDTx(ctx context.Context, tx pgx.Tx, tenant uuid.UUID, requestID string, since time.Time) (ReceiptIdempotencyRecord, bool, error) {
+	var rec ReceiptIdempotencyRecord
+	var prev *string
+	var decisionID sql.NullString
+	err := tx.QueryRow(ctx, `
+    SELECT id, hash, prev_hash, body_canonical, decision_id, tool_name, method, path, outcome, request_id
+    FROM receipts_invocation
+    WHERE tenant_id=$1 AND request_id=$2 AND ts >= $3
+    ORDER BY ts DESC
+    LIMIT 1`, tenant, requestID, since).Scan(&rec.ID, &rec.Hash, &prev, &rec.BodyCanonical, &decisionID, &rec.Payload.ToolName, &rec.Payload.Method, &rec.Payload.Path, &rec.Payload.Outcome, &rec.Payload.RequestID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return rec, false, nil
+		}
+		return rec, false, err
+	}
+	if prev != nil {
+		rec.PrevHash = *prev
+	}
+	rec.Payload.Kind = "invocation"
+	if decisionID.Valid {
+		rec.Payload.DecisionID = decisionID.String
+	}
+	rec.Payload.Body = json.RawMessage(rec.BodyCanonical)
+	return rec, true, nil
 }
 
 func (s *Store) ListReceiptChain(ctx context.Context, tenant uuid.UUID, limit int, kind string) ([]receipts.ChainRecord, error) {

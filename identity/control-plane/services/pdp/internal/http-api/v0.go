@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -212,10 +213,17 @@ func writeDecisionReceipt(ctx context.Context, logger *slog.Logger, store *dbsto
 		logger.Error("receipt canonical json failed", "err", err)
 		return
 	}
-	prev, _ := store.LastDecisionHash(ctx, tenant)
-	hash := receipts.HashBytes(append([]byte(prev), bodyBytes...))
-	if err := store.InsertDecisionReceipt(ctx, tenant, decisionID, requestID, policyHash, decision, bodyBytes, prev, hash, traceID, spanID); err != nil {
+	since := receipts.RequestIDDedupeSince(time.Now().UTC(), requestIDDedupeWindow(logger))
+	outcome, err := store.InsertDecisionReceiptIdempotent(ctx, tenant, requestID, decisionID, policyHash, decision, bodyBytes, traceID, spanID, since, receiptChainLockScope(logger))
+	if err != nil {
 		logger.Error("insert decision receipt failed", "err", err)
+		return
+	}
+	switch outcome {
+	case receipts.IdempotencyReplayed:
+		logger.Info("receipt idempotency replay", "request_id", requestID)
+	case receipts.IdempotencyConflict:
+		logger.Error("receipt idempotency conflict", "request_id", requestID)
 	}
 }
 
@@ -233,4 +241,37 @@ func writeError(w http.ResponseWriter, status int, code, message, requestID, tra
 
 func writeMethodNotAllowed(w http.ResponseWriter) {
 	writeError(w, http.StatusMethodNotAllowed, protocol.ErrorCodeMethodNotAllowed, "method not allowed", "", "")
+}
+
+var dedupeWindowOnce sync.Once
+var dedupeWindow time.Duration
+var chainScopeOnce sync.Once
+var chainScope string
+
+func requestIDDedupeWindow(logger *slog.Logger) time.Duration {
+	dedupeWindowOnce.Do(func() {
+		window, err := receipts.ResolveRequestIDDedupeWindow(os.Getenv("UMBRA_REQUEST_ID_DEDUPE_WINDOW"))
+		if err != nil {
+			logger.Warn("invalid UMBRA_REQUEST_ID_DEDUPE_WINDOW; using default", "err", err)
+		}
+		dedupeWindow = window
+	})
+	if dedupeWindow == 0 {
+		return receipts.DefaultRequestIDDedupeWindow
+	}
+	return dedupeWindow
+}
+
+func receiptChainLockScope(logger *slog.Logger) string {
+	chainScopeOnce.Do(func() {
+		scope, err := receipts.ResolveChainLockScope(os.Getenv("UMBRA_RECEIPT_CHAIN_LOCK_SCOPE"))
+		if err != nil {
+			logger.Warn("invalid UMBRA_RECEIPT_CHAIN_LOCK_SCOPE; using default", "err", err)
+		}
+		chainScope = scope
+	})
+	if chainScope == "" {
+		return "tenant"
+	}
+	return chainScope
 }

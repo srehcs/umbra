@@ -11,4 +11,8 @@ How to use:
 2. Serialize to canonical JSON bytes (no whitespace).
 3. Compare the bytes to `canonical` and hash to `hash`.
 
+Notes:
+- Receipt ingest canonicalizes raw JSON by sorting object keys before hashing.
+- Floats and non-ASCII strings/keys are invalid for V0 receipt bodies.
+
 If your implementation produces different bytes, receipt hashes will diverge.

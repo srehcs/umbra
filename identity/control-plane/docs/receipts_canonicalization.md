@@ -1,10 +1,12 @@
 # Receipt Canonicalization (V0)
 
 Deterministic hashing depends on stable byte serialization. In V0 we use Go's
-`encoding/json` marshaling on structs to produce canonical JSON bytes.
+`encoding/json` marshaling on structs to produce canonical JSON bytes. For
+receipt ingest, raw JSON is canonicalized by sorting object keys.
 
 ## Rules
-- Canonicalization uses Go structs with explicit field order; maps are forbidden.
+- Internal receipts use Go structs with explicit field order; maps are forbidden.
+- Receipt ingest canonicalizes raw JSON by sorting object keys.
 - Do not use floats in receipt bodies (avoid 1 vs 1.0 ambiguity).
 - Use `omitempty` for optional fields; zero values must be omitted.
 - Arrays preserve order; do not reorder elements for hashing.
