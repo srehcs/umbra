@@ -23,6 +23,10 @@ func WriteReceiptsCSVHeader(writer *csv.Writer) {
 		"path",
 		"outcome",
 		"status_code",
+		"signature_alg",
+		"signature_kid",
+		"signature",
+		"signed_at",
 		"receipt_hash",
 		"receipt_prev_hash",
 	})
@@ -45,6 +49,10 @@ func WriteReceiptsCSVRecord(writer *csv.Writer, item ExportRecord) {
 		item.Path,
 		item.Outcome,
 		intPtrToString(item.StatusCode),
+		item.SignatureAlg,
+		item.SignatureKid,
+		item.Signature,
+		timePtrToString(item.SignedAt),
 		item.ReceiptHash,
 		item.ReceiptPrevHash,
 	})
@@ -55,4 +63,11 @@ func intPtrToString(v *int) string {
 		return ""
 	}
 	return strconv.Itoa(*v)
+}
+
+func timePtrToString(v *time.Time) string {
+	if v == nil || v.IsZero() {
+		return ""
+	}
+	return v.UTC().Format(time.RFC3339)
 }

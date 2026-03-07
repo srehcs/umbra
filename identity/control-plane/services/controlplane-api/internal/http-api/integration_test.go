@@ -3,7 +3,13 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -19,6 +25,7 @@ import (
 
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/policy"
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/protocol"
+	"github.com/umbra-labs/agent-identity-control-plane/packages/go/receipts"
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/testutil"
 	"github.com/umbra-labs/agent-identity-control-plane/services/controlplane-api/internal/storage"
 )
@@ -371,6 +378,208 @@ func TestReceiptIngestIdempotencyCanonicalBody(t *testing.T) {
 
 func intPtr(v int) *int {
 	return &v
+}
+
+type failingSigner struct{}
+
+func (f failingSigner) SignHashHex(_ string) (receipts.SignatureMetadata, error) {
+	return receipts.SignatureMetadata{}, errors.New("simulated signing failure")
+}
+
+func TestReceiptIngestSignsWhenSignerConfigured(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("UMBRA_TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("UMBRA_TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	db, cleanup := testutil.ConnectIsolatedTestDB(t, dsn)
+	defer cleanup()
+
+	if err := applySchema(t, db.Pool); err != nil {
+		t.Fatalf("schema setup failed: %v", err)
+	}
+
+	tenantID := createTenant(t, db.Pool, "receipt-signing-tenant")
+	privateKeyPEM, publicKeyPEM := mustGenerateECDSATestKey(t)
+	signer, err := receipts.NewECDSAP256SignerFromPEM(privateKeyPEM, "key://local-test")
+	if err != nil {
+		t.Fatalf("new signer: %v", err)
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	server := &Server{Logger: logger, Store: storage.NewWithSigner(db, signer)}
+
+	body := map[string]interface{}{
+		"actor": map[string]interface{}{"id": "user-1", "type": "human"},
+		"tool":  map[string]interface{}{"name": "demo.tool", "method": "GET", "endpoint": "/demo"},
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	req := receiptIngestRequest{
+		Kind:       "decision",
+		RequestID:  "req-sign-1",
+		DecisionID: uuid.NewString(),
+		Decision:   "allow",
+		PolicyHash: "policy-hash-sign",
+		Body:       bodyBytes,
+	}
+	ingestReceipt(t, server, tenantID, req)
+
+	var hash, alg, kid, signature string
+	var signedAt *time.Time
+	if err := db.Pool.QueryRow(ctx, `
+    SELECT hash, signature_alg, signature_kid, signature, signed_at
+    FROM receipts_decision
+    WHERE tenant_id=$1 AND request_id=$2
+    ORDER BY ts DESC
+    LIMIT 1`, tenantID, req.RequestID).Scan(&hash, &alg, &kid, &signature, &signedAt); err != nil {
+		t.Fatalf("signed receipt lookup failed: %v", err)
+	}
+	if alg != receipts.SignatureAlgECDSAP256SHA256 {
+		t.Fatalf("unexpected signature alg: %s", alg)
+	}
+	if kid != "key://local-test" {
+		t.Fatalf("unexpected signature kid: %s", kid)
+	}
+	if signature == "" {
+		t.Fatal("expected signature to be present")
+	}
+	if signedAt == nil || signedAt.IsZero() {
+		t.Fatal("expected signed_at to be present")
+	}
+
+	publicKey, err := receipts.ParseECDSAPublicKeyFromPEM(publicKeyPEM)
+	if err != nil {
+		t.Fatalf("parse public key: %v", err)
+	}
+	if err := receipts.VerifyECDSAP256SignatureHashHex(publicKey, hash, signature); err != nil {
+		t.Fatalf("signature verification failed: %v", err)
+	}
+}
+
+func TestReceiptIngestRejectsClientProvidedSignatureMetadata(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("UMBRA_TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("UMBRA_TEST_DATABASE_URL not set")
+	}
+	db, cleanup := testutil.ConnectIsolatedTestDB(t, dsn)
+	defer cleanup()
+
+	if err := applySchema(t, db.Pool); err != nil {
+		t.Fatalf("schema setup failed: %v", err)
+	}
+
+	tenantID := createTenant(t, db.Pool, "receipt-signature-client-supplied")
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	server := &Server{Logger: logger, Store: storage.New(db)}
+
+	body := map[string]interface{}{
+		"actor": map[string]interface{}{"id": "user-1", "type": "human"},
+		"tool":  map[string]interface{}{"name": "demo.tool", "method": "GET", "endpoint": "/demo"},
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	req := receiptIngestRequest{
+		Kind:         "decision",
+		RequestID:    "req-client-signature-1",
+		DecisionID:   uuid.NewString(),
+		Decision:     "allow",
+		PolicyHash:   "policy-hash-sign",
+		Body:         bodyBytes,
+		SignatureAlg: receipts.SignatureAlgECDSAP256SHA256,
+		SignatureKid: "key://client",
+		Signature:    "ZmFrZQ==",
+		SignedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	resp := ingestReceiptRaw(t, server, tenantID, req)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d %s", resp.Code, resp.Body.String())
+	}
+	var errResp protocol.ErrorResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("parse error response: %v", err)
+	}
+	if errResp.Error.Code != "RECEIPT_INVALID" {
+		t.Fatalf("expected RECEIPT_INVALID, got %s", errResp.Error.Code)
+	}
+}
+
+func TestReceiptIngestRequiredSigningFailureReturns503(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("UMBRA_TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("UMBRA_TEST_DATABASE_URL not set")
+	}
+	db, cleanup := testutil.ConnectIsolatedTestDB(t, dsn)
+	defer cleanup()
+
+	if err := applySchema(t, db.Pool); err != nil {
+		t.Fatalf("schema setup failed: %v", err)
+	}
+
+	tenantID := createTenant(t, db.Pool, "receipt-required-signing-failure")
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	server := &Server{Logger: logger, Store: storage.NewWithSignerPolicy(db, failingSigner{}, true)}
+
+	body := map[string]interface{}{
+		"actor": map[string]interface{}{"id": "user-1", "type": "human"},
+		"tool":  map[string]interface{}{"name": "demo.tool", "method": "GET", "endpoint": "/demo"},
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	req := receiptIngestRequest{
+		Kind:       "decision",
+		RequestID:  "req-required-signing-fail-1",
+		DecisionID: uuid.NewString(),
+		Decision:   "allow",
+		PolicyHash: "policy-hash-sign",
+		Body:       bodyBytes,
+	}
+	resp := ingestReceiptRaw(t, server, tenantID, req)
+	if resp.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d %s", resp.Code, resp.Body.String())
+	}
+	var errResp protocol.ErrorResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("parse error response: %v", err)
+	}
+	if errResp.Error.Code != protocol.ErrorCodeReceiptSigningUnavailable {
+		t.Fatalf("expected %s, got %s", protocol.ErrorCodeReceiptSigningUnavailable, errResp.Error.Code)
+	}
+}
+
+func TestRouterFailsWhenSigningRequiredAndDisabled(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("UMBRA_TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("UMBRA_TEST_DATABASE_URL not set")
+	}
+	t.Setenv("DATABASE_URL", dsn)
+	t.Setenv("UMBRA_RECEIPT_SIGNING_ENABLED", "false")
+	t.Setenv("UMBRA_RECEIPT_SIGNING_REQUIRED", "true")
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	_, err := Router(logger)
+	if !errors.Is(err, receipts.ErrReceiptSigningUnavailable) {
+		t.Fatalf("expected signing unavailable init error, got %v", err)
+	}
+}
+
+func mustGenerateECDSATestKey(t *testing.T) ([]byte, []byte) {
+	t.Helper()
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	privateDER, err := x509.MarshalECPrivateKey(privateKey)
+	if err != nil {
+		t.Fatalf("marshal private key: %v", err)
+	}
+	publicDER, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal public key: %v", err)
+	}
+	privatePEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privateDER})
+	publicPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: publicDER})
+	return privatePEM, publicPEM
 }
 
 func TestReceiptIngestIdempotencyConcurrent(t *testing.T) {

@@ -3,7 +3,7 @@ SHELL := /bin/bash
 COMPOSE := docker compose -f deployments/docker-compose.yml
 COMPOSE_PROFILES ?= obs
 
-.PHONY: bootstrap fmt lint test gen up down logs dev dev-min seed docker-build verify migrate receipts-verify e2e-setup e2e e2e-fast e2e-local
+.PHONY: bootstrap fmt lint test gen up down logs dev demo dev-min seed docker-build verify migrate receipts-verify e2e-setup e2e e2e-fast e2e-local
 
 bootstrap:
 	@echo "Bootstrap: go mod tidy (optional) + ui deps"
@@ -48,6 +48,10 @@ dev:
 	@echo "API: http://localhost:8080"
 	@echo "PDP: http://localhost:8081"
 	@echo "PEP: http://localhost:8082"
+
+# One-command demo bring-up: start, seed, health-check, and print verification steps.
+demo:
+	@bash scripts/dev/demo_start.sh
 
 # Start minimal stack (UI + API + PDP + deps) without PEP/MCP services.
 dev-min:

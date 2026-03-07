@@ -290,6 +290,33 @@ func TestValidateReceiptIngestMissingFields(t *testing.T) {
 	}
 }
 
+func TestValidateReceiptIngestRejectsClientSignatureMetadata(t *testing.T) {
+	req := receiptIngestRequest{
+		Kind:         "decision",
+		RequestID:    "req-1",
+		DecisionID:   "decision-1",
+		Decision:     "allow",
+		PolicyHash:   "policy-hash-1",
+		Body:         json.RawMessage(`{"actor":{"id":"u"}}`),
+		SignatureAlg: "ECDSA_P256_SHA256",
+		SignatureKid: "key://client",
+		Signature:    "ZmFrZQ==",
+		SignedAt:     "2026-03-03T12:00:00Z",
+	}
+	errs := validateReceiptIngest(req)
+	hasField := func(name string) bool {
+		for _, err := range errs {
+			if err.Field == name {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasField("signature_alg") || !hasField("signature_kid") || !hasField("signature") || !hasField("signed_at") {
+		t.Fatalf("expected signature metadata fields to be rejected, got %#v", errs)
+	}
+}
+
 func TestHandleSimulatePolicy_WithValidPolicy(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	server := &Server{Logger: logger, Store: nil}

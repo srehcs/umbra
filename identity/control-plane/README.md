@@ -50,6 +50,9 @@ Open:
 
 Demo script:
 - `docs/runbooks/demo.md`
+- `docs/runbooks/demo_walkthrough.md`
+- `docs/runbooks/mtls_deploy_note.md`
+- `docs/runbooks/trace_demo.md`
 - `docs/runbooks/security_demo.md`
 - PDP unavailable runbook: `docs/runbooks/pdp_unavailable.md`
 - Examples: `docs/examples/`
@@ -59,8 +62,12 @@ Demo script:
 ## Documentation
 
 Start here:
+- `docs/README.md` (index)
 - `docs/00_exec_summary.md`
 - `docs/runbooks/demo.md`
+- `docs/runbooks/demo_walkthrough.md`
+- `docs/security/mtls.md`
+- `docs/runbooks/trace_demo.md`
 - `docs/runbooks/security_demo.md`
 - `docs/runbooks/pdp_unavailable.md`
 

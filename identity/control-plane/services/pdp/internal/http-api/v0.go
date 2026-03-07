@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -36,7 +37,7 @@ type receiptBody struct {
 	SpanID        string         `json:"span_id,omitempty"`
 }
 
-func registerV0(mux *http.ServeMux, logger *slog.Logger) {
+func registerV0(mux *http.ServeMux, logger *slog.Logger) error {
 	dsn := os.Getenv("DATABASE_URL")
 	db, err := stor.Connect(context.Background(), dsn)
 	if err != nil {
@@ -44,7 +45,19 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 	}
 	var store *dbstore.Store
 	if db != nil {
-		store = dbstore.New(db)
+		signer, signerPolicy, signErr := receipts.NewSignerFromEnvWithPolicy()
+		if signErr != nil {
+			if signerPolicy.Required || receipts.IsReceiptSigningUnavailable(signErr) {
+				return signErr
+			}
+			logger.Error("receipt signer init failed; continuing without signing", "err", signErr)
+			store = dbstore.New(db)
+		} else if signer != nil {
+			logger.Info("receipt signing enabled for pdp")
+			store = dbstore.NewWithSignerPolicy(db, signer, signerPolicy.Required)
+		} else {
+			store = dbstore.New(db)
+		}
 	}
 
 	tracer := otel.Tracer("umbra.pdp")
@@ -139,10 +152,13 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 				TraceID:    traceID,
 				SpanID:     spanID,
 			}
-			writeDecisionReceipt(ctx, reqLogger, store, tenantID, decisionID, requestID, "", "deny", receiptBody{
+			if err := writeDecisionReceipt(ctx, reqLogger, store, tenantID, decisionID, requestID, "", "deny", receiptBody{
 				Actor: req.Actor, Tool: req.Tool, Decision: "deny", Reason: "no active policy (default deny)",
 				RequestID: requestID, TraceID: traceID, SpanID: spanID,
-			}, traceID, spanID)
+			}, traceID, spanID); err != nil {
+				writeError(w, http.StatusServiceUnavailable, protocol.ErrorCodeReceiptSigningUnavailable, "receipt signing unavailable", requestID, traceID)
+				return
+			}
 			writeJSON(w, resp)
 			return
 		}
@@ -185,7 +201,7 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 			SpanID:        spanID,
 		}
 
-		writeDecisionReceipt(ctx, reqLogger, store, tenantID, decisionID, requestID, ap.PolicyHash, d.Decision, receiptBody{
+		if err := writeDecisionReceipt(ctx, reqLogger, store, tenantID, decisionID, requestID, ap.PolicyHash, d.Decision, receiptBody{
 			Actor:         req.Actor,
 			Tool:          req.Tool,
 			Decision:      d.Decision,
@@ -196,28 +212,35 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 			RequestID:     requestID,
 			TraceID:       traceID,
 			SpanID:        spanID,
-		}, traceID, spanID)
+		}, traceID, spanID); err != nil {
+			writeError(w, http.StatusServiceUnavailable, protocol.ErrorCodeReceiptSigningUnavailable, "receipt signing unavailable", requestID, traceID)
+			return
+		}
 
 		reqLogger.Info("decision evaluated", "decision_id", decisionID.String(), "decision", d.Decision, "policy_hash", ap.PolicyHash)
 
 		writeJSON(w, resp)
 	})
+	return nil
 }
 
-func writeDecisionReceipt(ctx context.Context, logger *slog.Logger, store *dbstore.Store, tenant uuid.UUID, decisionID uuid.UUID, requestID string, policyHash string, decision string, body receiptBody, traceID, spanID string) {
+func writeDecisionReceipt(ctx context.Context, logger *slog.Logger, store *dbstore.Store, tenant uuid.UUID, decisionID uuid.UUID, requestID string, policyHash string, decision string, body receiptBody, traceID, spanID string) error {
 	if store == nil {
-		return
+		return nil
 	}
 	bodyBytes, err := receipts.CanonicalJSON(body)
 	if err != nil {
 		logger.Error("receipt canonical json failed", "err", err)
-		return
+		return nil
 	}
 	since := receipts.RequestIDDedupeSince(time.Now().UTC(), requestIDDedupeWindow(logger))
 	outcome, err := store.InsertDecisionReceiptIdempotent(ctx, tenant, requestID, decisionID, policyHash, decision, bodyBytes, traceID, spanID, since, receiptChainLockScope(logger))
 	if err != nil {
+		if errors.Is(err, receipts.ErrReceiptSigningUnavailable) {
+			return err
+		}
 		logger.Error("insert decision receipt failed", "err", err)
-		return
+		return nil
 	}
 	switch outcome {
 	case receipts.IdempotencyReplayed:
@@ -225,6 +248,7 @@ func writeDecisionReceipt(ctx context.Context, logger *slog.Logger, store *dbsto
 	case receipts.IdempotencyConflict:
 		logger.Error("receipt idempotency conflict", "request_id", requestID)
 	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

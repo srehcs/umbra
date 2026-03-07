@@ -125,12 +125,34 @@ func TestControlPlaneContractGolden(t *testing.T) {
 				Strict:     true,
 				AssertBody: assertGoldenError("controlplane_receipt_ingest_conflict.json"),
 			},
+			{
+				Name:       "receipt ingest rejects client signature metadata",
+				Method:     http.MethodPost,
+				Path:       "/v1/receipts",
+				RequestID:  "req-receipt-signature-client",
+				Fixtures:   fixtures,
+				Body:       receiptIngestDecisionBodyWithClientSignature("req-receipt-signature-client", "decision-sign-client"),
+				WantStatus: http.StatusBadRequest,
+				WantHeaders: map[string]string{
+					"x-umbra-request-id": "req-receipt-signature-client",
+				},
+				WantError: &testutil.ErrorExpectation{
+					Code:      "RECEIPT_INVALID",
+					Message:   "receipt validation failed",
+					RequestID: "req-receipt-signature-client",
+				},
+				Strict: false,
+			},
 		},
 	})
 }
 
 func receiptIngestDecisionBody(requestID, decisionID string) []byte {
 	return []byte(`{"kind":"decision","request_id":"` + requestID + `","decision_id":"` + decisionID + `","decision":"allow","policy_hash":"policy-hash","trace_id":"trace-1","span_id":"span-1","body":{"actor":{"id":"user-1","type":"human"},"tool":{"name":"demo.tool","method":"GET","endpoint":"/demo"}}}`)
+}
+
+func receiptIngestDecisionBodyWithClientSignature(requestID, decisionID string) []byte {
+	return []byte(`{"kind":"decision","request_id":"` + requestID + `","decision_id":"` + decisionID + `","decision":"allow","policy_hash":"policy-hash","signature_alg":"ECDSA_P256_SHA256","signature_kid":"key://client","signature":"ZmFrZQ==","signed_at":"2026-03-03T00:00:00Z","body":{"actor":{"id":"user-1","type":"human"},"tool":{"name":"demo.tool","method":"GET","endpoint":"/demo"}}}`)
 }
 
 func createTenantForContract(t *testing.T, pool *pgxpool.Pool, name string) uuid.UUID {

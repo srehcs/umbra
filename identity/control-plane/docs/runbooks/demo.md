@@ -2,16 +2,31 @@
 
 This runbook is the **definition of demo-ready**.
 
+For a stakeholder-facing concise flow with expected outputs, see:
+- `docs/runbooks/demo_walkthrough.md`
+- `docs/runbooks/trace_demo.md`
+
 ## 0) Start stack
+Recommended (one command):
 ```bash
-make dev
+make demo
 ```
 
-The seed script prints two tenant IDs:
+`make demo` starts the stack, waits for readiness, seeds data, runs `demo-check`,
+and prints tenant IDs plus verification curl commands.
+
+The output includes two tenant IDs:
 - TenantA
 - TenantB
 
 Copy one of them for the `x-umbra-tenant-id` header.
+
+Manual equivalent:
+```bash
+make dev
+make seed
+make demo-check
+```
 
 Optional: auto-seed the UI tenant
 Set `NEXT_PUBLIC_TENANT_ID` before starting the UI so the console auto-selects a tenant:
@@ -58,7 +73,8 @@ Try a denied path:
 curl -i -H "x-umbra-tenant-id: $TENANT_A" http://localhost:8082/tool/secret
 ```
 Expected:
-- `403 Forbidden`
+- `403 Forbidden` when `PEP_MODE=enforce` (default for `make demo`)
+- `200 OK` when `PEP_MODE=observe`, with receipts still showing a deny decision
 
 ## 4) View receipts
 ```bash

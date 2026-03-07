@@ -35,6 +35,10 @@ func TestReceiptExportCSVHeader(t *testing.T) {
 		"path",
 		"outcome",
 		"status_code",
+		"signature_alg",
+		"signature_kid",
+		"signature",
+		"signed_at",
 		"receipt_hash",
 		"receipt_prev_hash",
 	}

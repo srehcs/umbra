@@ -7,6 +7,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -19,9 +20,21 @@ import (
 	stor "github.com/umbra-labs/agent-identity-control-plane/packages/go/storage"
 )
 
-type Store struct{ db *pgxpool.Pool }
+type Store struct {
+	db              *pgxpool.Pool
+	signer          receipts.Signer
+	signingRequired bool
+}
 
 func New(db *stor.DB) *Store { return &Store{db: db.Pool} }
+
+func NewWithSigner(db *stor.DB, signer receipts.Signer) *Store {
+	return &Store{db: db.Pool, signer: signer}
+}
+
+func NewWithSignerPolicy(db *stor.DB, signer receipts.Signer, signingRequired bool) *Store {
+	return &Store{db: db.Pool, signer: signer, signingRequired: signingRequired}
+}
 
 type Tool struct {
 	ID        uuid.UUID       `json:"id"`
@@ -191,23 +204,27 @@ type ExportFilters struct {
 }
 
 type ExportRecord struct {
-	SchemaVersion   string    `json:"schema_version"`
-	Kind            string    `json:"kind"`
-	TS              time.Time `json:"ts"`
-	RequestID       string    `json:"request_id,omitempty"`
-	DecisionID      string    `json:"decision_id,omitempty"`
-	TraceID         string    `json:"trace_id,omitempty"`
-	PolicyHash      string    `json:"policy_hash,omitempty"`
-	PolicyVersion   *int      `json:"policy_version,omitempty"`
-	Decision        string    `json:"decision,omitempty"`
-	ActorID         string    `json:"actor_id,omitempty"`
-	ToolName        string    `json:"tool_name,omitempty"`
-	Method          string    `json:"method,omitempty"`
-	Path            string    `json:"path,omitempty"`
-	Outcome         string    `json:"outcome,omitempty"`
-	StatusCode      *int      `json:"status_code,omitempty"`
-	ReceiptHash     string    `json:"receipt_hash"`
-	ReceiptPrevHash string    `json:"receipt_prev_hash,omitempty"`
+	SchemaVersion   string     `json:"schema_version"`
+	Kind            string     `json:"kind"`
+	TS              time.Time  `json:"ts"`
+	RequestID       string     `json:"request_id,omitempty"`
+	DecisionID      string     `json:"decision_id,omitempty"`
+	TraceID         string     `json:"trace_id,omitempty"`
+	PolicyHash      string     `json:"policy_hash,omitempty"`
+	PolicyVersion   *int       `json:"policy_version,omitempty"`
+	Decision        string     `json:"decision,omitempty"`
+	ActorID         string     `json:"actor_id,omitempty"`
+	ToolName        string     `json:"tool_name,omitempty"`
+	Method          string     `json:"method,omitempty"`
+	Path            string     `json:"path,omitempty"`
+	Outcome         string     `json:"outcome,omitempty"`
+	StatusCode      *int       `json:"status_code,omitempty"`
+	SignatureAlg    string     `json:"signature_alg,omitempty"`
+	SignatureKid    string     `json:"signature_kid,omitempty"`
+	Signature       string     `json:"signature,omitempty"`
+	SignedAt        *time.Time `json:"signed_at,omitempty"`
+	ReceiptHash     string     `json:"receipt_hash"`
+	ReceiptPrevHash string     `json:"receipt_prev_hash,omitempty"`
 }
 
 func (s *Store) LastDecisionHash(ctx context.Context, tenant uuid.UUID) (string, error) {
@@ -325,12 +342,17 @@ func (s *Store) InsertDecisionReceiptIdempotent(
 			return ReceiptIdempotencyRecord{}, err
 		}
 		hash := receipts.HashBytes(append([]byte(prev), body...))
+		signature, err := resolveSignatureMetadata(hash, s.signer, s.signingRequired)
+		if err != nil {
+			return ReceiptIdempotencyRecord{}, err
+		}
 		var id uuid.UUID
 		err = tx.QueryRow(ctx, `
-    INSERT INTO receipts_decision(tenant_id, decision_id, request_id, policy_hash, decision, body_json, body_canonical, prev_hash, hash, trace_id, span_id)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+    INSERT INTO receipts_decision(tenant_id, decision_id, request_id, policy_hash, decision, body_json, body_canonical, prev_hash, hash, trace_id, span_id, signature_alg, signature_kid, signature, signed_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
     RETURNING id`,
 			tenant, decisionID, nullIfEmpty(requestID), policyHash, decision, body, body, nullIfEmpty(prev), hash, nullIfEmpty(traceID), nullIfEmpty(spanID),
+			nullIfEmpty(signature.Algorithm), nullIfEmpty(signature.KeyID), nullIfEmpty(signature.Signature), nullTime(signature.SignedAt),
 		).Scan(&id)
 		if err != nil {
 			return ReceiptIdempotencyRecord{}, err
@@ -363,10 +385,14 @@ func (s *Store) InsertInvocationReceiptIdempotent(
 			return ReceiptIdempotencyRecord{}, err
 		}
 		hash := receipts.HashBytes(append([]byte(prev), body...))
+		signature, err := resolveSignatureMetadata(hash, s.signer, s.signingRequired)
+		if err != nil {
+			return ReceiptIdempotencyRecord{}, err
+		}
 		var id uuid.UUID
 		err = tx.QueryRow(ctx, `
-    INSERT INTO receipts_invocation(tenant_id, decision_id, request_id, tool_name, method, path, outcome, status_code, latency_ms, body_json, body_canonical, prev_hash, hash, trace_id, span_id)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+    INSERT INTO receipts_invocation(tenant_id, decision_id, request_id, tool_name, method, path, outcome, status_code, latency_ms, body_json, body_canonical, prev_hash, hash, trace_id, span_id, signature_alg, signature_kid, signature, signed_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
     RETURNING id`,
 			tenant,
 			decisionID,
@@ -383,6 +409,10 @@ func (s *Store) InsertInvocationReceiptIdempotent(
 			hash,
 			nullIfEmpty(traceID),
 			nullIfEmpty(spanID),
+			nullIfEmpty(signature.Algorithm),
+			nullIfEmpty(signature.KeyID),
+			nullIfEmpty(signature.Signature),
+			nullTime(signature.SignedAt),
 		).Scan(&id)
 		if err != nil {
 			return ReceiptIdempotencyRecord{}, err
@@ -521,6 +551,36 @@ func nullIfEmpty(s string) interface{} {
 		return nil
 	}
 	return s
+}
+
+func nullTime(t *time.Time) interface{} {
+	if t == nil || t.IsZero() {
+		return nil
+	}
+	return t.UTC()
+}
+
+func resolveSignatureMetadata(hash string, signer receipts.Signer, signingRequired bool) (receipts.SignatureMetadata, error) {
+	if signer == nil {
+		if signingRequired {
+			return receipts.SignatureMetadata{}, fmt.Errorf("%w: signer not configured", receipts.ErrReceiptSigningUnavailable)
+		}
+		return receipts.SignatureMetadata{}, nil
+	}
+	meta, err := signer.SignHashHex(hash)
+	if err != nil {
+		if signingRequired {
+			return receipts.SignatureMetadata{}, fmt.Errorf("%w: %v", receipts.ErrReceiptSigningUnavailable, err)
+		}
+		return receipts.SignatureMetadata{}, nil
+	}
+	if err := receipts.ValidateSignatureMetadata(&meta); err != nil {
+		if signingRequired {
+			return receipts.SignatureMetadata{}, fmt.Errorf("%w: %v", receipts.ErrReceiptSigningUnavailable, err)
+		}
+		return receipts.SignatureMetadata{}, nil
+	}
+	return meta, nil
 }
 
 func lastDecisionHashTx(ctx context.Context, tx pgx.Tx, tenant uuid.UUID) (string, error) {
@@ -669,7 +729,11 @@ func (s *Store) listReceiptsUnion(ctx context.Context, tenant uuid.UUID, limit i
         'hash', hash,
         'prev_hash', prev_hash,
         'trace_id', trace_id,
-        'span_id', span_id
+        'span_id', span_id,
+        'signature_alg', signature_alg,
+        'signature_kid', signature_kid,
+        'signature', signature,
+        'signed_at', signed_at
       ) AS obj,
       id,
       request_id,
@@ -697,7 +761,11 @@ func (s *Store) listReceiptsUnion(ctx context.Context, tenant uuid.UUID, limit i
         'hash', hash,
         'prev_hash', prev_hash,
         'trace_id', trace_id,
-        'span_id', span_id
+        'span_id', span_id,
+        'signature_alg', signature_alg,
+        'signature_kid', signature_kid,
+        'signature', signature,
+        'signed_at', signed_at
       ) AS obj,
       id,
       request_id,
@@ -760,7 +828,11 @@ func (s *Store) listReceiptsDecision(ctx context.Context, tenant uuid.UUID, limi
       'hash', hash,
       'prev_hash', prev_hash,
       'trace_id', trace_id,
-      'span_id', span_id
+      'span_id', span_id,
+      'signature_alg', signature_alg,
+      'signature_kid', signature_kid,
+      'signature', signature,
+      'signed_at', signed_at
     ) AS obj
     FROM receipts_decision` + where + `
     ORDER BY ts DESC
@@ -789,7 +861,11 @@ func (s *Store) listReceiptsInvocation(ctx context.Context, tenant uuid.UUID, li
       'hash', hash,
       'prev_hash', prev_hash,
       'trace_id', trace_id,
-      'span_id', span_id
+      'span_id', span_id,
+      'signature_alg', signature_alg,
+      'signature_kid', signature_kid,
+      'signature', signature,
+      'signed_at', signed_at
     ) AS obj
     FROM receipts_invocation` + where + `
     ORDER BY ts DESC
@@ -1021,7 +1097,7 @@ func (s *Store) exportDecisionReceiptsRows(ctx context.Context, tenant uuid.UUID
 
 	args = append(args, f.Limit)
 	sql := `
-    SELECT ts, decision_id, request_id, trace_id, policy_hash, decision, hash, prev_hash,
+    SELECT ts, decision_id, request_id, trace_id, policy_hash, decision, hash, prev_hash, signature_alg, signature_kid, signature, signed_at,
       body_json->'actor'->>'id' AS actor_id,
       body_json->'tool'->>'name' AS tool_name,
       NULLIF(body_json->>'policy_version','')::int AS policy_version
@@ -1074,7 +1150,7 @@ func (s *Store) exportDecisionReceipts(ctx context.Context, tenant uuid.UUID, f 
 
 	args = append(args, f.Limit)
 	sql := `
-    SELECT ts, decision_id, request_id, trace_id, policy_hash, decision, hash, prev_hash,
+    SELECT ts, decision_id, request_id, trace_id, policy_hash, decision, hash, prev_hash, signature_alg, signature_kid, signature, signed_at,
       body_json->'actor'->>'id' AS actor_id,
       body_json->'tool'->>'name' AS tool_name,
       NULLIF(body_json->>'policy_version','')::int AS policy_version
@@ -1150,7 +1226,7 @@ func (s *Store) exportInvocationReceipts(ctx context.Context, tenant uuid.UUID, 
 
 	args = append(args, f.Limit)
 	sql := `
-    SELECT ts, decision_id, request_id, trace_id, tool_name, method, path, outcome, status_code, hash, prev_hash,
+    SELECT ts, decision_id, request_id, trace_id, tool_name, method, path, outcome, status_code, hash, prev_hash, signature_alg, signature_kid, signature, signed_at,
       body_json->>'policy_hash' AS policy_hash,
       NULLIF(body_json->>'policy_version','')::int AS policy_version
     FROM receipts_invocation` + where + `
@@ -1171,9 +1247,11 @@ func (s *Store) exportInvocationReceipts(ctx context.Context, tenant uuid.UUID, 
 		var statusCode *int
 		var hash string
 		var prev *string
+		var signatureAlg, signatureKid, signature *string
+		var signedAt *time.Time
 		var policyHash *string
 		var policyVersion *int
-		if err := rows.Scan(&ts, &decisionID, &requestID, &traceID, &toolName, &method, &path, &outcome, &statusCode, &hash, &prev, &policyHash, &policyVersion); err != nil {
+		if err := rows.Scan(&ts, &decisionID, &requestID, &traceID, &toolName, &method, &path, &outcome, &statusCode, &hash, &prev, &signatureAlg, &signatureKid, &signature, &signedAt, &policyHash, &policyVersion); err != nil {
 			return nil, err
 		}
 		record := ExportRecord{
@@ -1188,6 +1266,10 @@ func (s *Store) exportInvocationReceipts(ctx context.Context, tenant uuid.UUID, 
 			Outcome:         outcome,
 			StatusCode:      statusCode,
 			PolicyVersion:   policyVersion,
+			SignatureAlg:    derefString(signatureAlg),
+			SignatureKid:    derefString(signatureKid),
+			Signature:       derefString(signature),
+			SignedAt:        signedAt,
 			ReceiptHash:     hash,
 			ReceiptPrevHash: derefString(prev),
 		}
@@ -1252,6 +1334,10 @@ func buildExportUnionQuery(tenant uuid.UUID, f ExportFilters) (string, []interfa
       NULL::text AS path,
       NULL::text AS outcome,
       NULL::int AS status_code,
+      signature_alg,
+      signature_kid,
+      signature,
+      signed_at,
       hash AS receipt_hash,
       prev_hash AS receipt_prev_hash
     FROM receipts_decision` + decisionWhere
@@ -1273,6 +1359,10 @@ func buildExportUnionQuery(tenant uuid.UUID, f ExportFilters) (string, []interfa
       path,
       outcome,
       status_code,
+      signature_alg,
+      signature_kid,
+      signature,
+      signed_at,
       hash AS receipt_hash,
       prev_hash AS receipt_prev_hash
     FROM receipts_invocation` + invWhere
@@ -1298,6 +1388,10 @@ func scanExportUnionRow(rows pgx.Rows) (ExportRecord, error) {
 	var path *string
 	var outcome *string
 	var statusCode *int
+	var signatureAlg *string
+	var signatureKid *string
+	var signature *string
+	var signedAt *time.Time
 	var receiptHash string
 	var receiptPrevHash *string
 
@@ -1317,6 +1411,10 @@ func scanExportUnionRow(rows pgx.Rows) (ExportRecord, error) {
 		&path,
 		&outcome,
 		&statusCode,
+		&signatureAlg,
+		&signatureKid,
+		&signature,
+		&signedAt,
 		&receiptHash,
 		&receiptPrevHash,
 	); err != nil {
@@ -1330,6 +1428,10 @@ func scanExportUnionRow(rows pgx.Rows) (ExportRecord, error) {
 		RequestID:       requestID,
 		TraceID:         traceID,
 		PolicyVersion:   policyVersion,
+		SignatureAlg:    derefString(signatureAlg),
+		SignatureKid:    derefString(signatureKid),
+		Signature:       derefString(signature),
+		SignedAt:        signedAt,
 		ReceiptHash:     receiptHash,
 		ReceiptPrevHash: derefString(receiptPrevHash),
 	}
@@ -1367,9 +1469,11 @@ func scanDecisionExportRow(rows pgx.Rows) (ExportRecord, error) {
 	var decisionID, requestID, traceID, policyHash, decision string
 	var hash string
 	var prev *string
+	var signatureAlg, signatureKid, signature *string
+	var signedAt *time.Time
 	var actorID, toolName *string
 	var policyVersion *int
-	if err := rows.Scan(&ts, &decisionID, &requestID, &traceID, &policyHash, &decision, &hash, &prev, &actorID, &toolName, &policyVersion); err != nil {
+	if err := rows.Scan(&ts, &decisionID, &requestID, &traceID, &policyHash, &decision, &hash, &prev, &signatureAlg, &signatureKid, &signature, &signedAt, &actorID, &toolName, &policyVersion); err != nil {
 		return ExportRecord{}, err
 	}
 	record := ExportRecord{
@@ -1382,6 +1486,10 @@ func scanDecisionExportRow(rows pgx.Rows) (ExportRecord, error) {
 		PolicyHash:      policyHash,
 		PolicyVersion:   policyVersion,
 		Decision:        decision,
+		SignatureAlg:    derefString(signatureAlg),
+		SignatureKid:    derefString(signatureKid),
+		Signature:       derefString(signature),
+		SignedAt:        signedAt,
 		ReceiptHash:     hash,
 		ReceiptPrevHash: derefString(prev),
 	}

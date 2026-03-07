@@ -28,6 +28,7 @@ import (
 type Server struct {
 	Logger *slog.Logger
 	Store  *dbstore.Store
+	Auth   *authConfig
 }
 
 type policyResponse struct {
@@ -67,6 +68,10 @@ type receiptIngestRequest struct {
 	DecisionID    string          `json:"decision_id,omitempty"`
 	TraceID       string          `json:"trace_id,omitempty"`
 	SpanID        string          `json:"span_id,omitempty"`
+	SignatureAlg  string          `json:"signature_alg,omitempty"`
+	SignatureKid  string          `json:"signature_kid,omitempty"`
+	Signature     string          `json:"signature,omitempty"`
+	SignedAt      string          `json:"signed_at,omitempty"`
 	Decision      string          `json:"decision,omitempty"`
 	PolicyHash    string          `json:"policy_hash,omitempty"`
 	PolicyVersion *int            `json:"policy_version,omitempty"`
@@ -87,7 +92,7 @@ type receiptIngestResponse struct {
 
 const requestIDConflictMessage = "request_id conflicts with existing receipt"
 
-func registerV0(mux *http.ServeMux, logger *slog.Logger) {
+func registerV0(mux *http.ServeMux, logger *slog.Logger) error {
 	// Wire DB (V0 simple): create store per request via global singleton in closure.
 	// In production, build a proper server struct in main and inject dependencies.
 	// For V0, we keep it concise but safe (timeouts, validation).
@@ -102,10 +107,31 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 	}
 	var store *dbstore.Store
 	if db != nil {
-		store = dbstore.New(db)
+		signer, signerPolicy, signErr := receipts.NewSignerFromEnvWithPolicy()
+		if signErr != nil {
+			if signerPolicy.Required || receipts.IsReceiptSigningUnavailable(signErr) {
+				return signErr
+			}
+			logger.Error("receipt signer init failed; continuing without signing", "err", signErr)
+			store = dbstore.New(db)
+		}
+		if signer != nil {
+			logger.Info("receipt signing enabled for controlplane-api")
+			store = dbstore.NewWithSignerPolicy(db, signer, signerPolicy.Required)
+		}
+		if store == nil {
+			store = dbstore.New(db)
+		}
+	}
+	authCfg, err := newAuthConfigFromEnv()
+	if err != nil {
+		return err
+	}
+	if authCfg != nil && authCfg.Enabled {
+		logger.Info("auth enabled for controlplane-api")
 	}
 
-	s := &Server{Logger: logger, Store: store}
+	s := &Server{Logger: logger, Store: store, Auth: authCfg}
 
 	mux.HandleFunc("/v1/tools", s.handleTools)
 	mux.HandleFunc("/v1/policies", s.handlePolicies)
@@ -116,6 +142,7 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 	mux.HandleFunc("/v1/receipts", s.handleReceipts)
 	mux.HandleFunc("/v1/receipts/export", s.handleReceiptsExport)
 	mux.HandleFunc("/v1/receipts/verify", s.handleReceiptsVerify)
+	return nil
 }
 
 func (s *Server) tenantFromRequest(r *http.Request) (uuid.UUID, error) {
@@ -128,15 +155,54 @@ func (s *Server) tenantFromRequest(r *http.Request) (uuid.UUID, error) {
 	return uuid.Parse(tid)
 }
 
+func (s *Server) resolveTenantAndAuthorize(w http.ResponseWriter, r *http.Request, requiredRoles ...string) (uuid.UUID, bool) {
+	if s.Auth != nil && s.Auth.Enabled {
+		principal, err := s.Auth.authenticate(r)
+		if err != nil {
+			writeUnauthorized(w, r)
+			return uuid.Nil, false
+		}
+		if !principal.HasAnyRole(requiredRoles...) {
+			writeForbidden(w, r)
+			return uuid.Nil, false
+		}
+		r.Header.Set("x-umbra-user", principal.UserID)
+		r.Header.Set("x-umbra-roles", strings.Join(principal.Roles, ","))
+		r.Header.Set("x-umbra-tenant-id", principal.TenantID.String())
+		return principal.TenantID, true
+	}
+
+	tenant, err := s.tenantFromRequest(r)
+	if err != nil || tenant == uuid.Nil {
+		writeInvalidTenant(w, r)
+		return uuid.Nil, false
+	}
+	return tenant, true
+}
+
 func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
+	requiredRoles := []string{roleAdmin, roleToolAdmin, roleToolReader}
+	if r.Method == http.MethodPost {
+		requiredRoles = []string{roleAdmin, roleToolAdmin}
+	}
+	var tenant uuid.UUID
+	if s.Auth != nil && s.Auth.Enabled {
+		var ok bool
+		tenant, ok = s.resolveTenantAndAuthorize(w, r, requiredRoles...)
+		if !ok {
+			return
+		}
+	}
 	if s.Store == nil {
 		writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 		return
 	}
-	tenant, err := s.tenantFromRequest(r)
-	if err != nil || tenant == uuid.Nil {
-		writeInvalidTenant(w, r)
-		return
+	if s.Auth == nil || !s.Auth.Enabled {
+		var ok bool
+		tenant, ok = s.resolveTenantAndAuthorize(w, r, requiredRoles...)
+		if !ok {
+			return
+		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -176,9 +242,12 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
-	tenant, err := s.tenantFromRequest(r)
-	if err != nil || tenant == uuid.Nil {
-		writeInvalidTenant(w, r)
+	requiredRoles := []string{roleAdmin, rolePolicyAdmin, rolePolicyReader}
+	if r.Method == http.MethodPost {
+		requiredRoles = []string{roleAdmin, rolePolicyAdmin}
+	}
+	tenant, ok := s.resolveTenantAndAuthorize(w, r, requiredRoles...)
+	if !ok {
 		return
 	}
 	if s.Store == nil {
@@ -252,14 +321,24 @@ func (s *Server) handleActivatePolicy(w http.ResponseWriter, r *http.Request) {
 		writeMethodNotAllowed(w, r)
 		return
 	}
+	var tenant uuid.UUID
+	if s.Auth != nil && s.Auth.Enabled {
+		var ok bool
+		tenant, ok = s.resolveTenantAndAuthorize(w, r, roleAdmin, rolePolicyAdmin)
+		if !ok {
+			return
+		}
+	}
 	if s.Store == nil {
 		writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 		return
 	}
-	tenant, err := s.tenantFromRequest(r)
-	if err != nil || tenant == uuid.Nil {
-		writeInvalidTenant(w, r)
-		return
+	if s.Auth == nil || !s.Auth.Enabled {
+		var ok bool
+		tenant, ok = s.resolveTenantAndAuthorize(w, r, roleAdmin, rolePolicyAdmin)
+		if !ok {
+			return
+		}
 	}
 	var body struct {
 		PolicyID string `json:"policy_id"`
@@ -277,14 +356,28 @@ func (s *Server) handleActivatePolicy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePolicyByID(w http.ResponseWriter, r *http.Request) {
+	requiredRoles := []string{roleAdmin, rolePolicyAdmin, rolePolicyReader}
+	if r.Method == http.MethodPut || r.Method == http.MethodPost {
+		requiredRoles = []string{roleAdmin, rolePolicyAdmin}
+	}
+	var tenant uuid.UUID
+	if s.Auth != nil && s.Auth.Enabled {
+		var ok bool
+		tenant, ok = s.resolveTenantAndAuthorize(w, r, requiredRoles...)
+		if !ok {
+			return
+		}
+	}
 	if s.Store == nil {
 		writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 		return
 	}
-	tenant, err := s.tenantFromRequest(r)
-	if err != nil || tenant == uuid.Nil {
-		writeInvalidTenant(w, r)
-		return
+	if s.Auth == nil || !s.Auth.Enabled {
+		var ok bool
+		tenant, ok = s.resolveTenantAndAuthorize(w, r, requiredRoles...)
+		if !ok {
+			return
+		}
 	}
 
 	path := strings.TrimPrefix(r.URL.Path, "/v1/policies/")
@@ -382,14 +475,24 @@ func (s *Server) handleActivePolicy(w http.ResponseWriter, r *http.Request) {
 		writeMethodNotAllowed(w, r)
 		return
 	}
+	var tenant uuid.UUID
+	if s.Auth != nil && s.Auth.Enabled {
+		var ok bool
+		tenant, ok = s.resolveTenantAndAuthorize(w, r, roleAdmin, rolePolicyAdmin, rolePolicyReader)
+		if !ok {
+			return
+		}
+	}
 	if s.Store == nil {
 		writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 		return
 	}
-	tenant, err := s.tenantFromRequest(r)
-	if err != nil || tenant == uuid.Nil {
-		writeInvalidTenant(w, r)
-		return
+	if s.Auth == nil || !s.Auth.Enabled {
+		var ok bool
+		tenant, ok = s.resolveTenantAndAuthorize(w, r, roleAdmin, rolePolicyAdmin, rolePolicyReader)
+		if !ok {
+			return
+		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -447,9 +550,8 @@ func (s *Server) handleSimulatePolicy(w http.ResponseWriter, r *http.Request) {
 		writeMethodNotAllowed(w, r)
 		return
 	}
-	tenant, err := s.tenantFromRequest(r)
-	if err != nil || tenant == uuid.Nil {
-		writeInvalidTenant(w, r)
+	tenant, ok := s.resolveTenantAndAuthorize(w, r, roleAdmin, rolePolicyAdmin)
+	if !ok {
 		return
 	}
 
@@ -561,14 +663,24 @@ func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReceiptsList(w http.ResponseWriter, r *http.Request) {
+	var tenant uuid.UUID
+	if s.Auth != nil && s.Auth.Enabled {
+		var ok bool
+		tenant, ok = s.resolveTenantAndAuthorize(w, r, roleAdmin, roleAuditor)
+		if !ok {
+			return
+		}
+	}
 	if s.Store == nil {
 		writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 		return
 	}
-	tenant, err := s.tenantFromRequest(r)
-	if err != nil || tenant == uuid.Nil {
-		writeInvalidTenant(w, r)
-		return
+	if s.Auth == nil || !s.Auth.Enabled {
+		var ok bool
+		tenant, ok = s.resolveTenantAndAuthorize(w, r, roleAdmin, roleAuditor)
+		if !ok {
+			return
+		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -601,14 +713,24 @@ func (s *Server) handleReceiptsList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReceiptsIngest(w http.ResponseWriter, r *http.Request) {
+	var tenant uuid.UUID
+	if s.Auth != nil && s.Auth.Enabled {
+		var ok bool
+		tenant, ok = s.resolveTenantAndAuthorize(w, r, roleAdmin, roleReceiptWriter)
+		if !ok {
+			return
+		}
+	}
 	if s.Store == nil {
 		writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 		return
 	}
-	tenant, err := s.tenantFromRequest(r)
-	if err != nil || tenant == uuid.Nil {
-		writeInvalidTenant(w, r)
-		return
+	if s.Auth == nil || !s.Auth.Enabled {
+		var ok bool
+		tenant, ok = s.resolveTenantAndAuthorize(w, r, roleAdmin, roleReceiptWriter)
+		if !ok {
+			return
+		}
 	}
 
 	var body receiptIngestRequest
@@ -655,6 +777,10 @@ func (s *Server) handleReceiptsIngest(w http.ResponseWriter, r *http.Request) {
 		}
 		result, err := s.Store.InsertDecisionReceiptIdempotent(ctx, tenant, body.RequestID, decisionID, body.PolicyHash, body.Decision, canonicalBody, idempotencyBody, body.TraceID, body.SpanID, dedupeSince, receiptChainLockScope(s.Logger))
 		if err != nil {
+			if receipts.IsReceiptSigningUnavailable(err) {
+				writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeReceiptSigningUnavailable, "receipt signing unavailable", nil, r)
+				return
+			}
 			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
@@ -685,6 +811,10 @@ func (s *Server) handleReceiptsIngest(w http.ResponseWriter, r *http.Request) {
 		}
 		result, err := s.Store.InsertInvocationReceiptIdempotent(ctx, tenant, body.RequestID, decisionID, body.ToolName, body.Method, body.Path, body.Outcome, body.StatusCode, latencyMs, canonicalBody, idempotencyBody, body.TraceID, body.SpanID, dedupeSince, receiptChainLockScope(s.Logger))
 		if err != nil {
+			if receipts.IsReceiptSigningUnavailable(err) {
+				writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeReceiptSigningUnavailable, "receipt signing unavailable", nil, r)
+				return
+			}
 			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
@@ -717,6 +847,19 @@ func validateReceiptIngest(body receiptIngestRequest) []fieldError {
 	if len(body.Body) == 0 {
 		errs = append(errs, fieldError{Field: "body", Message: "required"})
 	}
+	if strings.TrimSpace(body.SignatureAlg) != "" {
+		errs = append(errs, fieldError{Field: "signature_alg", Message: "must be omitted; server-managed"})
+	}
+	if strings.TrimSpace(body.SignatureKid) != "" {
+		errs = append(errs, fieldError{Field: "signature_kid", Message: "must be omitted; server-managed"})
+	}
+	if strings.TrimSpace(body.Signature) != "" {
+		errs = append(errs, fieldError{Field: "signature", Message: "must be omitted; server-managed"})
+	}
+	if strings.TrimSpace(body.SignedAt) != "" {
+		errs = append(errs, fieldError{Field: "signed_at", Message: "must be omitted; server-managed"})
+	}
+
 	switch body.Kind {
 	case "decision":
 		if strings.TrimSpace(body.DecisionID) == "" {
@@ -812,6 +955,14 @@ func writeInvalidTenant(w http.ResponseWriter, r *http.Request) {
 	writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidTenant, "missing/invalid x-umbra-tenant-id", nil, r)
 }
 
+func writeUnauthorized(w http.ResponseWriter, r *http.Request) {
+	writeErrorResponse(w, http.StatusUnauthorized, protocol.ErrorCodeUnauthorized, "unauthorized", nil, r)
+}
+
+func writeForbidden(w http.ResponseWriter, r *http.Request) {
+	writeErrorResponse(w, http.StatusForbidden, protocol.ErrorCodeForbidden, "forbidden", nil, r)
+}
+
 func writeInvalidJSON(w http.ResponseWriter, r *http.Request) {
 	writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidJSON, "invalid json", nil, r)
 }
@@ -878,14 +1029,24 @@ func (s *Server) handleReceiptsExport(w http.ResponseWriter, r *http.Request) {
 		writeMethodNotAllowed(w, r)
 		return
 	}
+	var tenant uuid.UUID
+	if s.Auth != nil && s.Auth.Enabled {
+		var ok bool
+		tenant, ok = s.resolveTenantAndAuthorize(w, r, roleAdmin, roleAuditor)
+		if !ok {
+			return
+		}
+	}
 	if s.Store == nil {
 		writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 		return
 	}
-	tenant, err := s.tenantFromRequest(r)
-	if err != nil || tenant == uuid.Nil {
-		writeInvalidTenant(w, r)
-		return
+	if s.Auth == nil || !s.Auth.Enabled {
+		var ok bool
+		tenant, ok = s.resolveTenantAndAuthorize(w, r, roleAdmin, roleAuditor)
+		if !ok {
+			return
+		}
 	}
 
 	q := r.URL.Query()
@@ -964,14 +1125,24 @@ func (s *Server) handleReceiptsVerify(w http.ResponseWriter, r *http.Request) {
 		writeMethodNotAllowed(w, r)
 		return
 	}
+	var tenant uuid.UUID
+	if s.Auth != nil && s.Auth.Enabled {
+		var ok bool
+		tenant, ok = s.resolveTenantAndAuthorize(w, r, roleAdmin, roleAuditor)
+		if !ok {
+			return
+		}
+	}
 	if s.Store == nil {
 		writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeStorageUnavailable, "storage not configured", nil, r)
 		return
 	}
-	tenant, err := s.tenantFromRequest(r)
-	if err != nil || tenant == uuid.Nil {
-		writeInvalidTenant(w, r)
-		return
+	if s.Auth == nil || !s.Auth.Enabled {
+		var ok bool
+		tenant, ok = s.resolveTenantAndAuthorize(w, r, roleAdmin, roleAuditor)
+		if !ok {
+			return
+		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()

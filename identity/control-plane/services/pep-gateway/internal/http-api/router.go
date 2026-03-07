@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func Router(logger *slog.Logger) http.Handler {
+func Router(logger *slog.Logger) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
@@ -19,6 +19,8 @@ func Router(logger *slog.Logger) http.Handler {
 	})
 
 	// V0 endpoints are wired in service-specific files.
-	registerV0(mux, logger)
-	return mux
+	if err := registerV0(mux, logger); err != nil {
+		return nil, err
+	}
+	return mux, nil
 }
