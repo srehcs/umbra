@@ -6,6 +6,7 @@
 3) `02_where_we_are_now.md`
 4) `03_next_steps.md`
 5) `runbooks/demo.md`
+6) `runbooks/demo_walkthrough.md`
 
 ## Engineering execution
 - `playbook.md` (how we ship safely, day-to-day)
@@ -23,10 +24,15 @@
 
 ## Security
 - `security/path_to_oidc_keycloak.md`
+- `security/mtls.md`
 - `security/rls_plan.md`
+- `security/receipt_signing.md`
 
 ## Runbooks and examples
 - `runbooks/`
+- `runbooks/demo_walkthrough.md`
+- `runbooks/mtls_deploy_note.md`
+- `runbooks/trace_demo.md`
 - `examples/`
 - `runbooks/pdp_unavailable.md`
 
@@ -34,6 +40,7 @@
 - `receipts_integrity.md`
 - `receipts_canonicalization.md`
 - `idempotency.md`
+- `test_vectors/canonicalization/`
 
 ## Navigation
 - `repo_map.md`
