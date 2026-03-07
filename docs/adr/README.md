@@ -24,3 +24,4 @@ This directory is the single source of truth for architectural decisions across 
 - `0009-identity-provider-claims-model.md` — Identity provider choice and claims model
 - `0010-typed-api-contracts-and-e2e.md` — Typed OpenAPI contracts and E2E harness
 - `0012-minimal-dev-stack-target.md` — Minimal dev stack target (make dev-min)
+- `0013-receipt-signing-strict-ingest-security-exception.md` — Security exception for strict receipt-signing ingest hardening

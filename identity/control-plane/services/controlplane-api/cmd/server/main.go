@@ -31,7 +31,11 @@ func main() {
 	}()
 
 	addr := ":" + getenv("PORT", "8080")
-	mux := httpapi.Router(logger)
+	mux, err := httpapi.Router(logger)
+	if err != nil {
+		logger.Error("router init failed", "err", err)
+		os.Exit(1)
+	}
 
 	srv := &http.Server{
 		Addr:              addr,

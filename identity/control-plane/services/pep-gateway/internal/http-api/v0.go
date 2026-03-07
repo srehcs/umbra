@@ -121,7 +121,7 @@ func writeInvalidTenant(w http.ResponseWriter) {
 	writeErrorResponse(w, http.StatusBadRequest, protocol.ErrorCodeInvalidTenant, "missing/invalid x-umbra-tenant-id", "", "", "")
 }
 
-func registerV0(mux *http.ServeMux, logger *slog.Logger) {
+func registerV0(mux *http.ServeMux, logger *slog.Logger) error {
 	tracer := otel.Tracer("umbra.pep")
 
 	pepMode := getenv("PEP_MODE", "observe")
@@ -144,7 +144,19 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 	}
 	var store *dbstore.Store
 	if db != nil {
-		store = dbstore.New(db)
+		signer, signerPolicy, signErr := receipts.NewSignerFromEnvWithPolicy()
+		if signErr != nil {
+			if signerPolicy.Required || receipts.IsReceiptSigningUnavailable(signErr) {
+				return signErr
+			}
+			logger.Error("receipt signer init failed; continuing without signing", "err", signErr)
+			store = dbstore.New(db)
+		} else if signer != nil {
+			logger.Info("receipt signing enabled for pep-gateway")
+			store = dbstore.NewWithSignerPolicy(db, signer, signerPolicy.Required)
+		} else {
+			store = dbstore.New(db)
+		}
 	}
 
 	upstreamURL, err := url.Parse(getenv("UPSTREAM_URL", "http://upstream-sample:8090"))
@@ -185,6 +197,7 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 
 	// Primary V0 enforcement surface: /tool/* forwarded to an upstream, with delegated PDP decision.
 	mux.Handle("/tool/", handleToolProxy(tracer, logger, store, pdp, proxy, pepMode))
+	return nil
 }
 
 // handleToolProxy enforces a PDP decision before proxying to upstream.
@@ -284,15 +297,21 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 				r.Host = ""
 				proxy.ModifyResponse = func(resp *http.Response) error {
 					lat := int(time.Since(started).Milliseconds())
-					writeInvocationReceipt(ctx, reqLogger, store, tenantID, nil, reqID, toolName, r.Method, upath, "", 0, "error", intPtr(resp.StatusCode), lat,
+					return writeInvocationReceipt(ctx, reqLogger, store, tenantID, nil, reqID, toolName, r.Method, upath, "", 0, "error", intPtr(resp.StatusCode), lat,
 						map[string]string{"stage": "pdp"}, "unavailable", pdpStatus, pdpErrorCode, started, pepMode, "forwarded")
-					return nil
 				}
 				proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, e error) {
+					if errors.Is(e, receipts.ErrReceiptSigningUnavailable) {
+						writeErrorResponse(rw, http.StatusServiceUnavailable, protocol.ErrorCodeReceiptSigningUnavailable, "receipt signing unavailable", reqID, "", traceCtx.TraceID)
+						return
+					}
 					lat := int(time.Since(started).Milliseconds())
 					reqLogger.Error("upstream error in observe mode (pdp unavailable)", "err", e)
-					writeInvocationReceipt(ctx, reqLogger, store, tenantID, nil, reqID, toolName, r.Method, upath, "", 0, "error", intPtr(http.StatusBadGateway), lat,
-						map[string]string{"stage": "pdp"}, "unavailable", pdpStatus, pdpErrorCode, started, pepMode, "forwarded")
+					if recErr := writeInvocationReceipt(ctx, reqLogger, store, tenantID, nil, reqID, toolName, r.Method, upath, "", 0, "error", intPtr(http.StatusBadGateway), lat,
+						map[string]string{"stage": "pdp"}, "unavailable", pdpStatus, pdpErrorCode, started, pepMode, "forwarded"); errors.Is(recErr, receipts.ErrReceiptSigningUnavailable) {
+						writeErrorResponse(rw, http.StatusServiceUnavailable, protocol.ErrorCodeReceiptSigningUnavailable, "receipt signing unavailable", reqID, "", traceCtx.TraceID)
+						return
+					}
 					writeErrorResponse(rw, http.StatusBadGateway, protocol.ErrorCodeUpstreamError, "upstream error", reqID, "", traceCtx.TraceID)
 				}
 				proxy.ServeHTTP(w, r)
@@ -300,8 +319,11 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 			}
 
 			lat := int(time.Since(started).Milliseconds())
-			writeInvocationReceipt(ctx, reqLogger, store, tenantID, nil, reqID, toolName, r.Method, upath, "", 0, "denied", intPtr(http.StatusServiceUnavailable), lat,
-				map[string]string{"stage": "pdp"}, "unavailable", pdpStatus, pdpErrorCode, started, pepMode, "blocked")
+			if recErr := writeInvocationReceipt(ctx, reqLogger, store, tenantID, nil, reqID, toolName, r.Method, upath, "", 0, "denied", intPtr(http.StatusServiceUnavailable), lat,
+				map[string]string{"stage": "pdp"}, "unavailable", pdpStatus, pdpErrorCode, started, pepMode, "blocked"); errors.Is(recErr, receipts.ErrReceiptSigningUnavailable) {
+				writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeReceiptSigningUnavailable, "receipt signing unavailable", reqID, "", traceCtx.TraceID)
+				return
+			}
 			writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodePolicyUnavailable, "pdp unavailable", reqID, "", traceCtx.TraceID)
 			return
 		}
@@ -319,15 +341,21 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 				r.Host = "" // let reverse proxy set Host appropriately
 				proxy.ModifyResponse = func(resp *http.Response) error {
 					lat := int(time.Since(started).Milliseconds())
-					writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, decision.PolicyHash, decision.PolicyVersion, "denied", intPtr(resp.StatusCode), lat,
+					return writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, decision.PolicyHash, decision.PolicyVersion, "denied", intPtr(resp.StatusCode), lat,
 						map[string]string{"reason": decision.Reason}, decision.Decision, "ok", "", started, pepMode, "forwarded")
-					return nil
 				}
 				proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, e error) {
+					if errors.Is(e, receipts.ErrReceiptSigningUnavailable) {
+						writeErrorResponse(rw, http.StatusServiceUnavailable, protocol.ErrorCodeReceiptSigningUnavailable, "receipt signing unavailable", reqID, decision.DecisionID, traceCtx.TraceID)
+						return
+					}
 					lat := int(time.Since(started).Milliseconds())
 					reqLogger.Error("upstream error in observe mode", "err", e)
-					writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, decision.PolicyHash, decision.PolicyVersion, "denied", intPtr(http.StatusBadGateway), lat,
-						map[string]string{"reason": decision.Reason}, decision.Decision, "ok", "", started, pepMode, "forwarded")
+					if recErr := writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, decision.PolicyHash, decision.PolicyVersion, "denied", intPtr(http.StatusBadGateway), lat,
+						map[string]string{"reason": decision.Reason}, decision.Decision, "ok", "", started, pepMode, "forwarded"); errors.Is(recErr, receipts.ErrReceiptSigningUnavailable) {
+						writeErrorResponse(rw, http.StatusServiceUnavailable, protocol.ErrorCodeReceiptSigningUnavailable, "receipt signing unavailable", reqID, decision.DecisionID, traceCtx.TraceID)
+						return
+					}
 					writeErrorResponse(rw, http.StatusBadGateway, protocol.ErrorCodeUpstreamError, "upstream error", reqID, decision.DecisionID, traceCtx.TraceID)
 				}
 				proxy.ServeHTTP(w, r)
@@ -336,8 +364,11 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 				// Enforce mode: block the request
 				reqLogger.Info("deny decision in enforce mode, blocking", "tenant", tenantID.String())
 				lat := int(time.Since(started).Milliseconds())
-				writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, decision.PolicyHash, decision.PolicyVersion, "denied", intPtr(http.StatusForbidden), lat,
-					map[string]string{"reason": decision.Reason}, decision.Decision, "ok", "", started, pepMode, "blocked")
+				if recErr := writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, decision.PolicyHash, decision.PolicyVersion, "denied", intPtr(http.StatusForbidden), lat,
+					map[string]string{"reason": decision.Reason}, decision.Decision, "ok", "", started, pepMode, "blocked"); errors.Is(recErr, receipts.ErrReceiptSigningUnavailable) {
+					writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeReceiptSigningUnavailable, "receipt signing unavailable", reqID, decision.DecisionID, traceCtx.TraceID)
+					return
+				}
 
 				// Return structured error response
 				writeErrorResponse(w, http.StatusForbidden, protocol.ErrorCodePolicyDenied, decision.Reason, reqID, decision.DecisionID, traceCtx.TraceID)
@@ -350,15 +381,21 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 		r.Host = "" // let reverse proxy set Host appropriately
 		proxy.ModifyResponse = func(resp *http.Response) error {
 			lat := int(time.Since(started).Milliseconds())
-			writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, decision.PolicyHash, decision.PolicyVersion, "success", intPtr(resp.StatusCode), lat,
+			return writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, decision.PolicyHash, decision.PolicyVersion, "success", intPtr(resp.StatusCode), lat,
 				map[string]string{"upstream": proxyURLHost(proxy)}, decision.Decision, "ok", "", started, pepMode, "forwarded")
-			return nil
 		}
 		proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, e error) {
+			if errors.Is(e, receipts.ErrReceiptSigningUnavailable) {
+				writeErrorResponse(rw, http.StatusServiceUnavailable, protocol.ErrorCodeReceiptSigningUnavailable, "receipt signing unavailable", reqID, decision.DecisionID, traceCtx.TraceID)
+				return
+			}
 			lat := int(time.Since(started).Milliseconds())
 			reqLogger.Error("upstream error", "err", e)
-			writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, decision.PolicyHash, decision.PolicyVersion, "error", intPtr(http.StatusBadGateway), lat,
-				map[string]string{"upstream": proxyURLHost(proxy)}, decision.Decision, "ok", "", started, pepMode, "forwarded")
+			if recErr := writeInvocationReceipt(ctx, reqLogger, store, tenantID, &decisionID, reqID, toolName, r.Method, upath, decision.PolicyHash, decision.PolicyVersion, "error", intPtr(http.StatusBadGateway), lat,
+				map[string]string{"upstream": proxyURLHost(proxy)}, decision.Decision, "ok", "", started, pepMode, "forwarded"); errors.Is(recErr, receipts.ErrReceiptSigningUnavailable) {
+				writeErrorResponse(rw, http.StatusServiceUnavailable, protocol.ErrorCodeReceiptSigningUnavailable, "receipt signing unavailable", reqID, decision.DecisionID, traceCtx.TraceID)
+				return
+			}
 			writeErrorResponse(rw, http.StatusBadGateway, protocol.ErrorCodeUpstreamError, "upstream error", reqID, decision.DecisionID, traceCtx.TraceID)
 		}
 
@@ -367,11 +404,11 @@ func handleToolProxy(tracer trace.Tracer, logger *slog.Logger, store invocationS
 }
 
 func writeInvocationReceipt(ctx context.Context, logger *slog.Logger, store invocationStore, tenant uuid.UUID, decisionID *uuid.UUID, requestID string,
-	toolName, method, path, policyHash string, policyVersion int, outcome string, statusCode *int, latencyMs int, meta map[string]string, decisionResult, pdpStatus, pdpErrorCode string, started time.Time, pepMode, enforcement string) {
+	toolName, method, path, policyHash string, policyVersion int, outcome string, statusCode *int, latencyMs int, meta map[string]string, decisionResult, pdpStatus, pdpErrorCode string, started time.Time, pepMode, enforcement string) error {
 
 	if store == nil {
 		logger.Warn("invocation receipt skipped (no store)")
-		return
+		return nil
 	}
 
 	rb := invocationReceiptBody{
@@ -396,7 +433,7 @@ func writeInvocationReceipt(ctx context.Context, logger *slog.Logger, store invo
 	bodyBytes, err := receipts.CanonicalJSON(rb)
 	if err != nil {
 		logger.Error("receipt canonical json failed", "err", err)
-		return
+		return nil
 	}
 
 	sc := trace.SpanContextFromContext(ctx)
@@ -405,11 +442,14 @@ func writeInvocationReceipt(ctx context.Context, logger *slog.Logger, store invo
 		traceID, spanID = sc.TraceID().String(), sc.SpanID().String()
 	}
 
-		since := receipts.RequestIDDedupeSince(time.Now().UTC(), requestIDDedupeWindow(logger))
-		outcomeResult, err := store.InsertInvocationReceiptIdempotent(ctx, tenant, requestID, decisionID, toolName, method, path, outcome, statusCode, latencyMs, bodyBytes, traceID, spanID, since, receiptChainLockScope(logger))
+	since := receipts.RequestIDDedupeSince(time.Now().UTC(), requestIDDedupeWindow(logger))
+	outcomeResult, err := store.InsertInvocationReceiptIdempotent(ctx, tenant, requestID, decisionID, toolName, method, path, outcome, statusCode, latencyMs, bodyBytes, traceID, spanID, since, receiptChainLockScope(logger))
 	if err != nil {
+		if errors.Is(err, receipts.ErrReceiptSigningUnavailable) {
+			return err
+		}
 		logger.Error("receipt insert failed", "err", err)
-		return
+		return nil
 	}
 	switch outcomeResult {
 	case receipts.IdempotencyReplayed:
@@ -417,6 +457,7 @@ func writeInvocationReceipt(ctx context.Context, logger *slog.Logger, store invo
 	case receipts.IdempotencyConflict:
 		logger.Error("receipt idempotency conflict", "request_id", requestID)
 	}
+	return nil
 }
 
 func parseCSV(s string) []string {
@@ -470,7 +511,6 @@ func receiptChainLockScope(logger *slog.Logger) string {
 	}
 	return chainScope
 }
-
 
 func classifyPDPError(err error, status int) (string, string) {
 	if err == nil {

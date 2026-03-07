@@ -8,9 +8,13 @@ This repository follows Umbra's shared engineering rules:
 From `identity/control-plane/`:
 
 ```bash
+make demo
 make dev
 make seed
 ```
+
+`make demo` is the one-command demo bring-up. It starts services, waits for readiness,
+seeds data, runs demo checks, and prints verification curl commands with tenant IDs.
 
 Minimal stack (UI + API + PDP only):
 ```bash
@@ -46,6 +50,10 @@ If you front the UI with an auth proxy, forward:
 - `x-umbra-roles` (comma-separated)
 - `x-umbra-tenant-id`
 
+Production ingress hardening:
+- mTLS edge pattern and certificate/header mapping: `docs/security/mtls.md`
+- Validation checklist: `docs/runbooks/mtls_deploy_note.md`
+
 Enable auth session mode (UI reads `/api/auth/session`):
 ```bash
 export AUTH_ENABLED=true
@@ -65,6 +73,22 @@ Receipt idempotency config
 ```bash
 export UMBRA_REQUEST_ID_DEDUPE_WINDOW="24h"
 export UMBRA_RECEIPT_CHAIN_LOCK_SCOPE="tenant" # or "day"
+```
+
+Optional: local receipt signing (placeholder key)
+```bash
+export UMBRA_RECEIPT_SIGNING_ENABLED=true
+export UMBRA_RECEIPT_SIGNING_REQUIRED=false # set true to fail closed
+export UMBRA_RECEIPT_SIGNING_KID="key://local-dev"
+export UMBRA_RECEIPT_SIGNING_PRIVATE_KEY_PEM="<pem-with-escaped-newlines>"
+```
+
+Note: `POST /v1/receipts` rejects client-supplied `signature_*`/`signed_at` fields.
+Signature metadata is generated server-side when signing is enabled.
+
+Trace smoke check
+```bash
+TENANT_ID="<tenant-id-from-seed>" bash scripts/dev/trace_smoke.sh
 ```
 
 E2E smoke tests

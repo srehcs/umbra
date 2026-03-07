@@ -10,13 +10,29 @@ Receipt schema supports optional signature metadata:
 - `signature`
 - `signed_at`
 
-These fields appear in receipt ingest/export payloads and are stored alongside
+These fields appear in receipt list/export payloads and are stored alongside
 the receipt hash chain fields.
 
-## Signing flow (managed signing service)
+`POST /v1/receipts` treats these fields as server-managed and rejects
+client-supplied signature metadata.
+
+## Local placeholder implementation (current)
+Services can sign receipt hashes with a local ECDSA P-256 key when enabled.
+
+Environment flags:
+- `UMBRA_RECEIPT_SIGNING_ENABLED=true`
+- `UMBRA_RECEIPT_SIGNING_REQUIRED=true` (optional fail-closed mode)
+- `UMBRA_RECEIPT_SIGNING_KID=<opaque-key-id>`
+- `UMBRA_RECEIPT_SIGNING_PRIVATE_KEY_PEM=<pem>`
+
+Default behavior remains unsigned unless explicitly enabled.
+If `UMBRA_RECEIPT_SIGNING_REQUIRED=true`, signer initialization and signing
+must succeed or the service fails closed with `RECEIPT_SIGNING_UNAVAILABLE`.
+
+## Signing flow (service-side)
 1. Serialize receipt body to canonical JSON bytes.
 2. Compute `receipt_hash = SHA256(prev_hash || body_json)`.
-3. Call a managed signing service with the hash bytes (or digest).
+3. Sign the hash bytes with configured signer.
 4. Store the signature metadata:
    - `signature_alg`: e.g., `RSASSA_PSS_SHA_256` or `ECDSA_P256_SHA256`
    - `signature_kid`: opaque key reference identifier
@@ -45,6 +61,13 @@ This is a local-only test harness example. It should never ship with real keys:
 3) Verify signature (base64) against receipt_hash.
 ```
 
+Automated coverage:
+- unit tests in `packages/go/receipts` (sign + verify)
+- integration tests in:
+  - `services/controlplane-api/internal/http-api`
+  - `services/pdp/internal/http-api`
+  - `services/pep-gateway/internal/http-api`
+
 ## Rotation policy (high-level)
 - Rotate signing keys on a periodic cadence defined by internal security policy.
 - Maintain an overlap window where old keys remain available for verification.
@@ -59,5 +82,5 @@ This is a local-only test harness example. It should never ship with real keys:
 - Schema guard script passes (`scripts/dev/verify_signature_schema.sh`).
 
 ## Future work
-- Implement signer/verify components in services and wire to receipt ingest.
-- Add automated verification tests with a placeholder key for local validation.
+- Replace local placeholder keys with managed KMS-backed signing for production.
+- Add key rollover verification workflows across historical receipts.

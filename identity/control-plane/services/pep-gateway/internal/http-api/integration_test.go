@@ -2,7 +2,12 @@ package httpapi
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"log/slog"
@@ -26,6 +31,16 @@ import (
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/testutil"
 	dbstore "github.com/umbra-labs/agent-identity-control-plane/services/pep-gateway/internal/storage"
 )
+
+type failingInvocationStore struct{}
+
+func (f failingInvocationStore) LastInvocationHash(ctx context.Context, tenant uuid.UUID) (string, error) {
+	return "", nil
+}
+
+func (f failingInvocationStore) InsertInvocationReceiptIdempotent(ctx context.Context, tenant uuid.UUID, requestID string, decisionID *uuid.UUID, toolName string, method string, path string, outcome string, statusCode *int, latencyMs int, body json.RawMessage, traceID string, spanID string, since time.Time, chainScope string) (receipts.IdempotencyOutcome, error) {
+	return receipts.IdempotencyConflict, receipts.ErrReceiptSigningUnavailable
+}
 
 func TestInvocationReceiptTraceIDStored(t *testing.T) {
 	dsn := strings.TrimSpace(os.Getenv("UMBRA_TEST_DATABASE_URL"))
@@ -246,6 +261,165 @@ func TestReceiptChainTraceIDConsistency(t *testing.T) {
 	}
 }
 
+func TestInvocationReceiptSigningEnabled(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("UMBRA_TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("UMBRA_TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	db, cleanup := testutil.ConnectIsolatedTestDB(t, dsn)
+	defer cleanup()
+
+	if err := applySchema(t, db.Pool); err != nil {
+		t.Fatalf("schema setup failed: %v", err)
+	}
+	tenantID := createTenantPEP(t, db.Pool, "pep-sign-tenant")
+
+	privateKeyPEM, publicKeyPEM := mustGenerateECDSAPEPPTestKey(t)
+	signer, err := receipts.NewECDSAP256SignerFromPEM(privateKeyPEM, "key://pep-test")
+	if err != nil {
+		t.Fatalf("new signer: %v", err)
+	}
+	store := dbstore.NewWithSigner(db, signer)
+
+	traceID := "4bf92f3577b34da6a3ce929d0e0e4736"
+	spanID := "00f067aa0ba902b7"
+	tid, _ := trace.TraceIDFromHex(traceID)
+	sid, _ := trace.SpanIDFromHex(spanID)
+
+	tracer := sdktrace.NewTracerProvider().Tracer("test")
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	pdp := &PDPClient{
+		BaseURL: "http://pdp.invalid",
+		Client: &http.Client{Transport: captureRoundTripper{
+			onRequest: func(req protocol.DecisionRequest) protocol.DecisionResponse {
+				return protocol.DecisionResponse{
+					Decision:   "allow",
+					DecisionID: uuid.NewString(),
+					Reason:     "ok",
+					RequestID:  req.Trace.RequestID,
+					TraceID:    req.Trace.TraceID,
+					SpanID:     req.Trace.SpanID,
+				}
+			},
+		}},
+	}
+
+	upstreamURL, _ := url.Parse("http://upstream.invalid")
+	proxy := httputil.NewSingleHostReverseProxy(upstreamURL)
+	proxy.Transport = staticRoundTripper{status: http.StatusOK, body: `{"status":"ok"}`}
+	handler := handleToolProxy(tracer, logger, store, pdp, proxy, "enforce")
+
+	reqID := "req-pep-sign-1"
+	req := httptest.NewRequest(http.MethodGet, "/tool/test", nil)
+	parentCtx := trace.ContextWithSpanContext(req.Context(), trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    tid,
+		SpanID:     sid,
+		TraceFlags: trace.FlagsSampled,
+	}))
+	req = req.WithContext(parentCtx)
+	req.Header.Set("x-umbra-tenant-id", tenantID.String())
+	req.Header.Set("x-umbra-request-id", reqID)
+	req.Header.Set("x-umbra-actor-id", "test-user")
+	req.Header.Set("x-umbra-tool-name", "test-tool")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var hash, alg, kid, signature string
+	if err := db.Pool.QueryRow(ctx, `
+    SELECT hash, signature_alg, signature_kid, signature
+    FROM receipts_invocation
+    WHERE request_id=$1
+    ORDER BY ts DESC
+    LIMIT 1`, reqID).Scan(&hash, &alg, &kid, &signature); err != nil {
+		t.Fatalf("signed receipt lookup failed: %v", err)
+	}
+	if alg != receipts.SignatureAlgECDSAP256SHA256 {
+		t.Fatalf("unexpected signature alg: %s", alg)
+	}
+	if kid != "key://pep-test" {
+		t.Fatalf("unexpected signature kid: %s", kid)
+	}
+	if signature == "" {
+		t.Fatal("expected signature")
+	}
+
+	publicKey, err := receipts.ParseECDSAPublicKeyFromPEM(publicKeyPEM)
+	if err != nil {
+		t.Fatalf("parse public key: %v", err)
+	}
+	if err := receipts.VerifyECDSAP256SignatureHashHex(publicKey, hash, signature); err != nil {
+		t.Fatalf("signature verification failed: %v", err)
+	}
+}
+
+func TestPEPRegisterFailsWhenSigningRequiredAndDisabled(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("UMBRA_TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("UMBRA_TEST_DATABASE_URL not set")
+	}
+	t.Setenv("DATABASE_URL", dsn)
+	t.Setenv("UMBRA_RECEIPT_SIGNING_ENABLED", "false")
+	t.Setenv("UMBRA_RECEIPT_SIGNING_REQUIRED", "true")
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	mux := http.NewServeMux()
+	err := registerV0(mux, logger)
+	if !errors.Is(err, receipts.ErrReceiptSigningUnavailable) {
+		t.Fatalf("expected signing unavailable error, got %v", err)
+	}
+}
+
+func TestHandleToolProxyReturns503OnRequiredSigningFailure(t *testing.T) {
+	tracer := sdktrace.NewTracerProvider().Tracer("test")
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	store := failingInvocationStore{}
+	pdp := &PDPClient{
+		BaseURL: "http://pdp.invalid",
+		Client: &http.Client{Transport: captureRoundTripper{
+			onRequest: func(req protocol.DecisionRequest) protocol.DecisionResponse {
+				return protocol.DecisionResponse{
+					Decision:   "allow",
+					DecisionID: uuid.NewString(),
+					Reason:     "ok",
+					RequestID:  req.Trace.RequestID,
+					TraceID:    req.Trace.TraceID,
+					SpanID:     req.Trace.SpanID,
+				}
+			},
+		}},
+	}
+	upstreamURL, _ := url.Parse("http://upstream.invalid")
+	proxy := httputil.NewSingleHostReverseProxy(upstreamURL)
+	proxy.Transport = staticRoundTripper{status: http.StatusOK, body: `{"status":"ok"}`}
+	handler := handleToolProxy(tracer, logger, store, pdp, proxy, "enforce")
+
+	req := httptest.NewRequest(http.MethodGet, "/tool/test", nil)
+	req.Header.Set("x-umbra-tenant-id", uuid.NewString())
+	req.Header.Set("x-umbra-request-id", "req-pep-signing-fail")
+	req.Header.Set("x-umbra-tool-name", "test-tool")
+	req.Header.Set("x-umbra-actor-id", "test-user")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	var errResp protocol.ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("parse error response failed: %v", err)
+	}
+	if errResp.Error.Code != protocol.ErrorCodeReceiptSigningUnavailable {
+		t.Fatalf("expected %s, got %s", protocol.ErrorCodeReceiptSigningUnavailable, errResp.Error.Code)
+	}
+}
+
 func applySchema(t *testing.T, pool *pgxpool.Pool) error {
 	t.Helper()
 	return testutil.ApplySchemaForTests(t, pool)
@@ -258,4 +432,23 @@ func createTenantPEP(t *testing.T, pool *pgxpool.Pool, name string) uuid.UUID {
 		t.Fatalf("insert tenant failed: %v", err)
 	}
 	return id
+}
+
+func mustGenerateECDSAPEPPTestKey(t *testing.T) ([]byte, []byte) {
+	t.Helper()
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	privateDER, err := x509.MarshalECPrivateKey(privateKey)
+	if err != nil {
+		t.Fatalf("marshal private key: %v", err)
+	}
+	publicDER, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal public key: %v", err)
+	}
+	privatePEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privateDER})
+	publicPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: publicDER})
+	return privatePEM, publicPEM
 }

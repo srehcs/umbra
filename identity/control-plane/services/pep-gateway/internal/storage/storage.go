@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -12,13 +13,25 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	stor "github.com/umbra-labs/agent-identity-control-plane/packages/go/storage"
 	"github.com/umbra-labs/agent-identity-control-plane/packages/go/receipts"
+	stor "github.com/umbra-labs/agent-identity-control-plane/packages/go/storage"
 )
 
-type Store struct{ db *pgxpool.Pool }
+type Store struct {
+	db              *pgxpool.Pool
+	signer          receipts.Signer
+	signingRequired bool
+}
 
 func New(db *stor.DB) *Store { return &Store{db: db.Pool} }
+
+func NewWithSigner(db *stor.DB, signer receipts.Signer) *Store {
+	return &Store{db: db.Pool, signer: signer}
+}
+
+func NewWithSignerPolicy(db *stor.DB, signer receipts.Signer, signingRequired bool) *Store {
+	return &Store{db: db.Pool, signer: signer, signingRequired: signingRequired}
+}
 
 func (s *Store) LastInvocationHash(ctx context.Context, tenant uuid.UUID) (string, error) {
 	var h *string
@@ -109,10 +122,14 @@ func (s *Store) InsertInvocationReceiptIdempotent(
 		return receipts.IdempotencyConflict, err
 	}
 	hash := receipts.HashBytes(append([]byte(prevHash), body...))
+	signature, err := s.signReceiptHash(hash)
+	if err != nil {
+		return receipts.IdempotencyConflict, err
+	}
 
 	_, err = tx.Exec(ctx, `
-    INSERT INTO receipts_invocation(tenant_id, decision_id, request_id, tool_name, method, path, outcome, status_code, latency_ms, body_json, body_canonical, prev_hash, hash, trace_id, span_id)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+    INSERT INTO receipts_invocation(tenant_id, decision_id, request_id, tool_name, method, path, outcome, status_code, latency_ms, body_json, body_canonical, prev_hash, hash, trace_id, span_id, signature_alg, signature_kid, signature, signed_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
 		tenant,
 		decisionID,
 		nullIfEmpty(requestID),
@@ -128,6 +145,10 @@ func (s *Store) InsertInvocationReceiptIdempotent(
 		hash,
 		nullIfEmpty(traceID),
 		nullIfEmpty(spanID),
+		nullIfEmpty(signature.Algorithm),
+		nullIfEmpty(signature.KeyID),
+		nullIfEmpty(signature.Signature),
+		nullTime(signature.SignedAt),
 	)
 	if err != nil {
 		return receipts.IdempotencyConflict, err
@@ -181,6 +202,36 @@ func nullIfEmpty(s string) interface{} {
 		return nil
 	}
 	return s
+}
+
+func nullTime(t *time.Time) interface{} {
+	if t == nil || t.IsZero() {
+		return nil
+	}
+	return t.UTC()
+}
+
+func (s *Store) signReceiptHash(hash string) (receipts.SignatureMetadata, error) {
+	if s.signer == nil {
+		if s.signingRequired {
+			return receipts.SignatureMetadata{}, fmt.Errorf("%w: signer not configured", receipts.ErrReceiptSigningUnavailable)
+		}
+		return receipts.SignatureMetadata{}, nil
+	}
+	meta, err := s.signer.SignHashHex(hash)
+	if err != nil {
+		if s.signingRequired {
+			return receipts.SignatureMetadata{}, fmt.Errorf("%w: %v", receipts.ErrReceiptSigningUnavailable, err)
+		}
+		return receipts.SignatureMetadata{}, nil
+	}
+	if err := receipts.ValidateSignatureMetadata(&meta); err != nil {
+		if s.signingRequired {
+			return receipts.SignatureMetadata{}, fmt.Errorf("%w: %v", receipts.ErrReceiptSigningUnavailable, err)
+		}
+		return receipts.SignatureMetadata{}, nil
+	}
+	return meta, nil
 }
 
 func findInvocationReceiptByRequestIDTx(ctx context.Context, tx pgx.Tx, tenant uuid.UUID, requestID string, since time.Time) ([]byte, bool, error) {

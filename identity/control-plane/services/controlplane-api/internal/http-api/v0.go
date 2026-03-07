@@ -67,6 +67,10 @@ type receiptIngestRequest struct {
 	DecisionID    string          `json:"decision_id,omitempty"`
 	TraceID       string          `json:"trace_id,omitempty"`
 	SpanID        string          `json:"span_id,omitempty"`
+	SignatureAlg  string          `json:"signature_alg,omitempty"`
+	SignatureKid  string          `json:"signature_kid,omitempty"`
+	Signature     string          `json:"signature,omitempty"`
+	SignedAt      string          `json:"signed_at,omitempty"`
 	Decision      string          `json:"decision,omitempty"`
 	PolicyHash    string          `json:"policy_hash,omitempty"`
 	PolicyVersion *int            `json:"policy_version,omitempty"`
@@ -87,7 +91,7 @@ type receiptIngestResponse struct {
 
 const requestIDConflictMessage = "request_id conflicts with existing receipt"
 
-func registerV0(mux *http.ServeMux, logger *slog.Logger) {
+func registerV0(mux *http.ServeMux, logger *slog.Logger) error {
 	// Wire DB (V0 simple): create store per request via global singleton in closure.
 	// In production, build a proper server struct in main and inject dependencies.
 	// For V0, we keep it concise but safe (timeouts, validation).
@@ -102,7 +106,21 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 	}
 	var store *dbstore.Store
 	if db != nil {
-		store = dbstore.New(db)
+		signer, signerPolicy, signErr := receipts.NewSignerFromEnvWithPolicy()
+		if signErr != nil {
+			if signerPolicy.Required || receipts.IsReceiptSigningUnavailable(signErr) {
+				return signErr
+			}
+			logger.Error("receipt signer init failed; continuing without signing", "err", signErr)
+			store = dbstore.New(db)
+		}
+		if signer != nil {
+			logger.Info("receipt signing enabled for controlplane-api")
+			store = dbstore.NewWithSignerPolicy(db, signer, signerPolicy.Required)
+		}
+		if store == nil {
+			store = dbstore.New(db)
+		}
 	}
 
 	s := &Server{Logger: logger, Store: store}
@@ -116,6 +134,7 @@ func registerV0(mux *http.ServeMux, logger *slog.Logger) {
 	mux.HandleFunc("/v1/receipts", s.handleReceipts)
 	mux.HandleFunc("/v1/receipts/export", s.handleReceiptsExport)
 	mux.HandleFunc("/v1/receipts/verify", s.handleReceiptsVerify)
+	return nil
 }
 
 func (s *Server) tenantFromRequest(r *http.Request) (uuid.UUID, error) {
@@ -655,6 +674,10 @@ func (s *Server) handleReceiptsIngest(w http.ResponseWriter, r *http.Request) {
 		}
 		result, err := s.Store.InsertDecisionReceiptIdempotent(ctx, tenant, body.RequestID, decisionID, body.PolicyHash, body.Decision, canonicalBody, idempotencyBody, body.TraceID, body.SpanID, dedupeSince, receiptChainLockScope(s.Logger))
 		if err != nil {
+			if receipts.IsReceiptSigningUnavailable(err) {
+				writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeReceiptSigningUnavailable, "receipt signing unavailable", nil, r)
+				return
+			}
 			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
@@ -685,6 +708,10 @@ func (s *Server) handleReceiptsIngest(w http.ResponseWriter, r *http.Request) {
 		}
 		result, err := s.Store.InsertInvocationReceiptIdempotent(ctx, tenant, body.RequestID, decisionID, body.ToolName, body.Method, body.Path, body.Outcome, body.StatusCode, latencyMs, canonicalBody, idempotencyBody, body.TraceID, body.SpanID, dedupeSince, receiptChainLockScope(s.Logger))
 		if err != nil {
+			if receipts.IsReceiptSigningUnavailable(err) {
+				writeErrorResponse(w, http.StatusServiceUnavailable, protocol.ErrorCodeReceiptSigningUnavailable, "receipt signing unavailable", nil, r)
+				return
+			}
 			writeErrorResponse(w, http.StatusInternalServerError, protocol.ErrorCodeDBError, "db error", nil, r)
 			return
 		}
@@ -717,6 +744,19 @@ func validateReceiptIngest(body receiptIngestRequest) []fieldError {
 	if len(body.Body) == 0 {
 		errs = append(errs, fieldError{Field: "body", Message: "required"})
 	}
+	if strings.TrimSpace(body.SignatureAlg) != "" {
+		errs = append(errs, fieldError{Field: "signature_alg", Message: "must be omitted; server-managed"})
+	}
+	if strings.TrimSpace(body.SignatureKid) != "" {
+		errs = append(errs, fieldError{Field: "signature_kid", Message: "must be omitted; server-managed"})
+	}
+	if strings.TrimSpace(body.Signature) != "" {
+		errs = append(errs, fieldError{Field: "signature", Message: "must be omitted; server-managed"})
+	}
+	if strings.TrimSpace(body.SignedAt) != "" {
+		errs = append(errs, fieldError{Field: "signed_at", Message: "must be omitted; server-managed"})
+	}
+
 	switch body.Kind {
 	case "decision":
 		if strings.TrimSpace(body.DecisionID) == "" {
