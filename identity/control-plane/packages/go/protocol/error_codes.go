@@ -4,6 +4,7 @@ const (
 	ErrorCodeBadRequest                = "BAD_REQUEST"
 	ErrorCodeConflict                  = "CONFLICT"
 	ErrorCodeDBError                   = "DB_ERROR"
+	ErrorCodeForbidden                 = "FORBIDDEN"
 	ErrorCodeInvalidJSON               = "INVALID_JSON"
 	ErrorCodeInvalidRequest            = "INVALID_REQUEST"
 	ErrorCodeInvalidTenant             = "INVALID_TENANT"
@@ -14,5 +15,6 @@ const (
 	ErrorCodePolicyDenied              = "POLICY_DENIED"
 	ErrorCodePolicyUnavailable         = "POLICY_UNAVAILABLE"
 	ErrorCodeStorageUnavailable        = "STORAGE_UNAVAILABLE"
+	ErrorCodeUnauthorized              = "UNAUTHORIZED"
 	ErrorCodeUpstreamError             = "UPSTREAM_ERROR"
 )
