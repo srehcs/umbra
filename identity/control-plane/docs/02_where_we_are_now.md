@@ -3,6 +3,7 @@
 This document is a reality check: **what is implemented in this repo** vs **what is planned**.
 
 ## Implemented
+
 - **Local stack** via docker-compose: Postgres, Redis (optional), OTel Collector, Jaeger, services, UI.
 - **Control Plane API**:
   - tools CRUD (tenant-scoped)
@@ -22,14 +23,22 @@ This document is a reality check: **what is implemented in this repo** vs **what
   - tools
   - policies (author + activate)
   - receipts table + structured detail view
+- **Control-plane auth**:
+  - controlplane-api validates JWTs with issuer/audience checks when auth is enabled
+  - UI supports OIDC login/callback/logout routes and HTTP-only cookie-backed sessions
+  - tenant and roles are derived from verified claims in auth mode
+  - dev-mode tenant header flow remains available for local demos
 
 ## Planned (documented, not fully implemented)
+
 - **CLI wrapper**: capture tool invocations and convert to PDP requests + receipts.
-- **OIDC / Keycloak**: replace dev tenant header with claims-based tenancy and RBAC.
+- **Production auth packaging**: documented provider bootstrap, customer IdP mapping guidance, and service-to-service auth beyond the current control-plane flow.
 - **Signature verification**: keep hash-chain; add signing keys and verification pipeline.
 
 ## Known hardening items (near-term)
-1) Make Go transport objects fully typed end-to-end (Decision request/response and receipts variants).
-2) Uniform error envelopes and consistent status codes.
-3) Stronger policy validation + simulation in control-plane API (not only UI).
-4) Service-to-service auth for PEP → PDP.
+
+1. Make Go transport objects fully typed end-to-end (Decision request/response and receipts variants).
+2. Uniform error envelopes and consistent status codes.
+3. Stronger policy validation + simulation in control-plane API (not only UI).
+4. Service-to-service auth for PEP → PDP.
+5. Production ingress pattern for mTLS/cert-auth handoff into short-lived JWTs understood by Umbra.

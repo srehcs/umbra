@@ -1,6 +1,6 @@
-import * as React from "react";
-import { CardHeader, CardDescription, CardTitle } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
+import * as React from 'react';
+import { CardHeader, CardDescription, CardTitle } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
 
 type SectionHeaderProps = {
   title: string;
@@ -8,7 +8,11 @@ type SectionHeaderProps = {
   className?: string;
 };
 
-export default function SectionHeader({ title, description, className }: SectionHeaderProps) {
+export default function SectionHeader({
+  title,
+  description,
+  className,
+}: SectionHeaderProps) {
   return (
     <CardHeader className={cn(className)}>
       <CardTitle>{title}</CardTitle>

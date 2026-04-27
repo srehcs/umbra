@@ -1,9 +1,9 @@
 # Trust Boundaries
 
-1) **Ingress boundary**: PEP receives tool invocations from agent runtimes.
-2) **Decision boundary**: PEP → PDP decision call (must be authenticated/authorized in production).
-3) **Control plane boundary**: Admin UI/API protected by OIDC; tenant-scoped.
-4) **Data boundary**: Postgres contains tenant-separated data; strict query hygiene required.
-5) **Telemetry boundary**: OTel pipeline must not leak secrets; receipts are metadata-only.
+1. **Ingress boundary**: PEP receives tool invocations from agent runtimes.
+2. **Decision boundary**: PEP → PDP decision call (must be authenticated/authorized in production).
+3. **Control plane boundary**: Admin UI/API protected by verified bearer-token claims when auth is enabled; tenant-scoped.
+4. **Data boundary**: Postgres contains tenant-separated data; strict query hygiene required.
+5. **Telemetry boundary**: OTel pipeline must not leak secrets; receipts are metadata-only.
 
 V0 runs on local/dev trust. Production requires mTLS and service-to-service auth before launch.
