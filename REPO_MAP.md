@@ -4,8 +4,12 @@
 - `README.md` -- project overview and quick start
 - `RULES.md` -- non-negotiable engineering rules
 - `SECURITY.md` -- security policy
+- `CONTRIBUTING.md` -- contribution workflow and quality bar
+- `LICENSE` -- Apache License 2.0
 - `CODEOWNERS` -- ownership and review routing
+- `AGENTS.md` -- minimal local agent instructions
 - `docs/adr/` -- architecture decision records (centralized)
+- `docs/archive/planning/` -- historical plans and ticket snapshots
 - `archive/` -- inactive or historical material
 
 ## Identity (active build)
