@@ -44,30 +44,63 @@ You can also override roles in the browser with:
 localStorage.setItem("umbra.roles", "policy_admin,tool_admin,auditor");
 ```
 
-Optional: auth session headers (when AUTH_ENABLED=true)
-If you front the UI with an auth proxy, forward:
-- `x-umbra-user`
-- `x-umbra-roles` (comma-separated)
-- `x-umbra-tenant-id`
+Optional: auth mode (UI + API)
+Use these together when you want the control-plane API and UI session route to require a verified bearer token:
+```bash
+export UMBRA_AUTH_ENABLED=true
+export NEXT_PUBLIC_AUTH_ENABLED=true
+export UMBRA_AUTH_JWT_HS256_SECRET="<dev-only-secret>"
+```
+Provider-backed OIDC mode:
+```bash
+export OIDC_ISSUER_URL="https://issuer.example/realms/umbra"
+export OIDC_CLIENT_ID="umbra-ui"
+export AUTH_BASE_URL="http://localhost:3000"
+```
+Optional:
+```bash
+export OIDC_CLIENT_SECRET="<provider-client-secret-if-needed>"
+export OIDC_JWKS_URL="https://issuer.example/realms/umbra/protocol/openid-connect/certs"
+```
+Compatibility note: the UI server also accepts `AUTH_ENABLED=true`, but `UMBRA_AUTH_ENABLED=true` is the canonical server-side flag.
+
+Optional local-only fallback for the current in-progress auth ticket:
+```bash
+export NEXT_PUBLIC_AUTH_DEV_TOKEN_ENABLED=true
+```
+Required claim validation when auth is enabled:
+```bash
+export UMBRA_AUTH_JWT_ISSUER="https://issuer.example"
+export UMBRA_AUTH_JWT_AUDIENCE="umbra-controlplane"
+```
 
 Production ingress hardening:
 - mTLS edge pattern and certificate/header mapping: `docs/security/mtls.md`
 - Validation checklist: `docs/runbooks/mtls_deploy_note.md`
 
-Enable auth session mode (UI reads `/api/auth/session`):
-```bash
-export AUTH_ENABLED=true
-export NEXT_PUBLIC_AUTH_ENABLED=true
-```
+In auth mode, the UI no longer trusts browser-supplied `x-umbra-user`, `x-umbra-roles`, or `x-umbra-tenant-id` headers. It derives session state from a verified JWT and forwards only `Authorization: Bearer ...` to the control-plane proxy.
 
-Example: header-based session fetch
+Provider-backed browser flow:
+- Sign in at `http://localhost:3000/api/auth/login`
+- The callback exchanges the OIDC code for an access token and stores it in an HTTP-only cookie
+- `GET /api/auth/session` and `/api/controlplane/*` then use the server-held session token
+
+Example: session fetch with bearer token
 ```bash
 curl -s \
-  -H "x-umbra-user: alice" \
-  -H "x-umbra-roles: policy_admin,tool_admin,auditor" \
-  -H "x-umbra-tenant-id: <tenant-id>" \
+  -H "Authorization: Bearer <dev-jwt>" \
   http://localhost:3000/api/auth/session | jq .
 ```
+
+For local UI testing, you can enable the dev-token fallback above and paste the token into the sidebar "Dev token" control. The UI will exchange it for an HTTP-only cookie-backed session.
+
+This fallback is intended for local development only. In production-oriented builds, disable it and use the provider-backed auth flow.
+
+The JWT must carry:
+- `sub` or `preferred_username`
+- `tenant_id` (UUID)
+- one or more roles via `roles`, `realm_access.roles`, `resource_access.umbra.roles`, or `groups`
+- if you use `groups`, use exact role names or `/umbra/<role>` group paths (for example `/umbra/policy_admin`)
 
 Receipt idempotency config
 ```bash

@@ -1,7 +1,15 @@
-"use client";
+'use client';
 
-import * as React from "react";
-import { z } from "zod";
+import * as React from 'react';
+import { z } from 'zod';
+import { isClientAuthEnabled } from './config';
+import {
+  AUTH_STATE_EVENT,
+  getStoredTenant,
+  parseRoles,
+  ROLE_STORAGE_KEY,
+  USER_STORAGE_KEY,
+} from './storage';
 
 type AuthUser = {
   id: string;
@@ -17,30 +25,22 @@ type AuthContextValue = {
   hasRole: (...roles: string[]) => boolean;
 };
 
-const ROLE_STORAGE_KEY = "umbra.roles";
-const USER_STORAGE_KEY = "umbra.user";
-const TENANT_STORAGE_KEY = "umbra.tenant_id";
-const DEFAULT_ROLES = ["developer", "tool_admin", "policy_admin", "auditor"];
+const DEFAULT_ROLES = ['developer', 'tool_admin', 'policy_admin', 'auditor'];
 
 const AuthContext = React.createContext<AuthContextValue | null>(null);
 
 const SessionResponseSchema = z.object({
-  user: z.object({ id: z.string(), name: z.string().optional() }).nullable().optional(),
+  user: z
+    .object({ id: z.string(), name: z.string().optional() })
+    .nullable()
+    .optional(),
   roles: z.array(z.string()).optional(),
   tenant_id: z.string().optional(),
 });
 type SessionResponse = z.infer<typeof SessionResponseSchema>;
 
-function parseRoles(input?: string | null): string[] {
-  if (!input) return [];
-  return input
-    .split(",")
-    .map((role) => role.trim().toLowerCase())
-    .filter(Boolean);
-}
-
 function resolveRoles(authEnabled: boolean): string[] {
-  if (typeof window === "undefined") {
+  if (typeof window === 'undefined') {
     return authEnabled ? [] : DEFAULT_ROLES;
   }
   const stored = parseRoles(localStorage.getItem(ROLE_STORAGE_KEY));
@@ -51,8 +51,8 @@ function resolveRoles(authEnabled: boolean): string[] {
 }
 
 function resolveUser(authEnabled: boolean): AuthUser | null {
-  if (typeof window === "undefined") {
-    return authEnabled ? null : { id: "dev-user" };
+  if (typeof window === 'undefined') {
+    return authEnabled ? null : { id: 'dev-user' };
   }
   const stored = localStorage.getItem(USER_STORAGE_KEY);
   if (stored && stored.trim().length > 0) {
@@ -62,21 +62,21 @@ function resolveUser(authEnabled: boolean): AuthUser | null {
   if (envUser && envUser.trim().length > 0) {
     return { id: envUser.trim() };
   }
-  return authEnabled ? null : { id: "dev-user" };
+  return authEnabled ? null : { id: 'dev-user' };
 }
 
 function resolveTenant(): string | undefined {
-  if (typeof window === "undefined") {
-    return undefined;
-  }
-  const tenant = localStorage.getItem(TENANT_STORAGE_KEY);
-  return tenant && tenant.trim().length > 0 ? tenant : undefined;
+  return getStoredTenant();
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const enabled = process.env.NEXT_PUBLIC_AUTH_ENABLED === "true";
-  const [roles, setRoles] = React.useState<string[]>(enabled ? [] : DEFAULT_ROLES);
-  const [user, setUser] = React.useState<AuthUser | null>(enabled ? null : { id: "dev-user" });
+  const enabled = isClientAuthEnabled();
+  const [roles, setRoles] = React.useState<string[]>(
+    enabled ? [] : DEFAULT_ROLES,
+  );
+  const [user, setUser] = React.useState<AuthUser | null>(
+    enabled ? null : { id: 'dev-user' },
+  );
   const [tenantId, setTenantId] = React.useState<string | undefined>(undefined);
 
   React.useEffect(() => {
@@ -88,11 +88,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
     const refreshSession = async (signal?: AbortSignal) => {
       try {
-        const res = await fetch("/api/auth/session", signal ? { signal } : undefined);
-        if (!res.ok) return;
+        const res = await fetch('/api/auth/session', signal ? { signal } : undefined);
+        if (!res.ok) {
+          if (!cancelled) {
+            setRoles([]);
+            setUser(null);
+            setTenantId(undefined);
+          }
+          return;
+        }
         const json = await res.json();
         const parsed = SessionResponseSchema.safeParse(json);
-        if (!parsed.success) return;
+        if (!parsed.success) {
+          if (!cancelled) {
+            setRoles([]);
+            setUser(null);
+            setTenantId(undefined);
+          }
+          return;
+        }
         const data: SessionResponse = parsed.data;
         if (cancelled) return;
         setRoles(data.roles ?? []);
@@ -117,24 +131,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const controller = new AbortController();
       void refreshSession(controller.signal);
       const focusHandler = () => refreshSession(controller.signal);
-      window.addEventListener("focus", focusHandler);
+      const authStateHandler = () => refreshSession(controller.signal);
+      window.addEventListener('focus', focusHandler);
+      window.addEventListener(AUTH_STATE_EVENT, authStateHandler);
+      window.addEventListener('storage', authStateHandler);
       return () => {
         cancelled = true;
         controller.abort();
-        window.removeEventListener("focus", focusHandler);
+        window.removeEventListener('focus', focusHandler);
+        window.removeEventListener(AUTH_STATE_EVENT, authStateHandler);
+        window.removeEventListener('storage', authStateHandler);
       };
     }
 
     refreshDev();
     const storageHandler = () => refreshDev();
     const interval = window.setInterval(refreshDev, 1000);
-    window.addEventListener("storage", storageHandler);
-    window.addEventListener("focus", storageHandler);
+    window.addEventListener('storage', storageHandler);
+    window.addEventListener('focus', storageHandler);
+    window.addEventListener(AUTH_STATE_EVENT, storageHandler);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
-      window.removeEventListener("storage", storageHandler);
-      window.removeEventListener("focus", storageHandler);
+      window.removeEventListener('storage', storageHandler);
+      window.removeEventListener('focus', storageHandler);
+      window.removeEventListener(AUTH_STATE_EVENT, storageHandler);
     };
   }, [enabled]);
 
@@ -164,7 +185,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 export function useAuth(): AuthContextValue {
   const ctx = React.useContext(AuthContext);
   if (!ctx) {
-    throw new Error("useAuth must be used within AuthProvider");
+    throw new Error('useAuth must be used within AuthProvider');
   }
   return ctx;
 }

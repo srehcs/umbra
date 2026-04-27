@@ -47,29 +47,9 @@ What this enables (plain language):
 
 ## Quick demo (local)
 
-From the repo root:
-
-```bash
-cd identity/control-plane
-make dev
-make seed
-```
-
-For a minimal stack (UI + API + PDP only):
-
-```bash
-cd identity/control-plane
-make dev-min
-```
-
-`make dev` enables the `obs` profile by default (Redis + OTel Collector + Jaeger).
-
-Then open:
-- UI: http://localhost:3000
-
-Demo guide:
+For local demo steps, see:
 - `identity/control-plane/docs/runbooks/demo.md`
-- PDP unavailable runbook: `identity/control-plane/docs/runbooks/pdp_unavailable.md`
+- `identity/control-plane/docs/runbooks/pdp_unavailable.md`
 
 ---
 
@@ -78,7 +58,23 @@ Demo guide:
 - Repo map: `REPO_MAP.md`
 - Engineering rules: `RULES.md`
 - Security policy: `SECURITY.md`
+- Contributing guide: `CONTRIBUTING.md`
+- License: `LICENSE`
 - Control-plane development workflow: `identity/control-plane/docs/how-to-develop.md`
+- Control-plane docs index: `identity/control-plane/docs/README.md`
+
+## Project status
+
+Umbra is in active development and early evaluation. APIs and docs may change.
+
+Current implementation state:
+- Demo bring-up, evaluator walkthrough, trace correlation, mTLS deployment guidance, and receipt signing are implemented locally in `identity/control-plane/`.
+- Control-plane auth is now provider-capable locally: the UI supports an OIDC login/callback flow with HTTP-only cookie sessions, and controlplane API role/tenant checks are claim-derived when auth is enabled.
+- Database-level multi-tenant isolation, KMS-backed signing, and broader production hardening remain in the next work queue.
+
+## Contributing
+
+We follow the engineering standards in `RULES.md`. If you plan to contribute, read the rules first.
 
 ## Assets
 

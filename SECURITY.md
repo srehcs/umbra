@@ -14,6 +14,7 @@ Key requirements include:
 - No secrets in git
 - Dependency scanning and container scanning in CI
 - Telemetry + audit receipts for security-relevant flows
+- No personal/local files
 
 ## Public documentation guidance
 Documentation must avoid operational details that could aid abuse or expose
